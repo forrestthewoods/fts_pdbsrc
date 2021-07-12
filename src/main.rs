@@ -38,6 +38,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    let info = pdb.pdb_information()?;
+    let stream_names = info.stream_names()?;
+    stream_names.iter().for_each(|stream_name| println!("Stream: [{}]", stream_name.name));
+
 
     println!("Goodbye cruel world!");
 
