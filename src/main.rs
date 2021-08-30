@@ -1,10 +1,71 @@
 use pdb::*;
 use std::result::Result;
+use structopt::StructOpt;
+
+#[derive(StructOpt, Debug)]
+#[structopt(
+    name = "fts_pdbsrc",
+    author = "Forrest Smith <forrestthewoods@gmail.com>",
+    about = "Embeds and extracts source files into PDBs"
+)]
+struct Opts {
+    #[structopt(subcommand)]
+    op : Op,
+}
+
+#[derive(StructOpt, Debug)]
+enum Op {
+    #[structopt(name = "embed")]
+    Embed(EmbedOp),
+
+    #[structopt(name = "extract_one")]
+    ExtractOne(ExtractOneOp),
+
+    #[structopt(name = "extract_all")]
+    ExtractAll(ExtractAllOp)
+}
+
+#[derive(Debug, StructOpt)]
+struct EmbedOp {
+    #[structopt(short, long, help = "Target PDB for specified operation")]
+    pdb: String,
+}
+
+#[derive(Debug, StructOpt)]
+struct ExtractOneOp {
+    #[structopt(short, long, help = "Target PDB for specified operation")]
+    pdb: String,
+
+    #[structopt(short, long, help = "Single file to extract")]
+    file: String,
+}   
+
+#[derive(Debug, StructOpt)]
+struct ExtractAllOp {
+    #[structopt(short, long, help = "Target PDB for specified operation")]
+    pdb: String,
+}    
+
+/*
+fts_pdbsrc --embed --targetpdb foo
+fts_pdbsrc --extract --targetpdb
+*/
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+
+    //println!("fts_pdbsrc");
+    //println!("  CurrentDir: {}", std::env::current_dir().unwrap().to_string_lossy());
+
+    let opt : Opts = Opts::from_args();
+    println!("{:?}", opt);
+    
+    Ok(())
+
+
+    /*
     println!("Hello, world!");
 
-    let file = std::fs::File::open("C:/source_control/fts_cache_test/x64/Release/fts_cache_test.pdb")?;
+    let file = std::fs::File::open("C:/temp/pdb/CrashTest.pdb")?;
     let mut pdb = pdb::PDB::open(file)?;
 
     let string_table = pdb.string_table()?;
@@ -46,4 +107,5 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Goodbye cruel world!");
 
     Ok(())
+    */
 }

@@ -7,3 +7,4 @@ edition = "2018"
 
 [dependencies]
 pdb = "0.7.0"
+structopt = "0.3.14"
