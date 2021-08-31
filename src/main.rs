@@ -1,3 +1,4 @@
+use anyhow::*;
 use pdb::*;
 use std::fs::File;
 use std::path::Path;
@@ -88,7 +89,7 @@ fn embed(op: EmbedOp) -> anyhow::Result<(), anyhow::Error> {
     let string_table = pdb.string_table()?;
 
     // Iterate files
-    let mut filepaths : Vec<_> = Default::default();
+    let mut filepaths: Vec<_> = Default::default();
 
     let di = pdb.debug_information()?;
     let mut modules = di.modules()?;
@@ -122,12 +123,43 @@ fn embed(op: EmbedOp) -> anyhow::Result<(), anyhow::Error> {
         match std::fs::File::open(&filepath) {
             Ok(_) => {
                 println!("File found, adding to pdb: [{:?}]", filepath);
+                let pathstr = filepath.to_str().unwrap();
 
-                let mut p = Popen::create(&["pdbstr", "-w", "-p:"], PopenConfig {
-                    stdout: Redirection::Pipe, ..Default::default()
-                })?;
+                let cmd = &[
+                    "pdbstr",
+                    "-w",
+                    &format!("-p:{}", pathstr),
+                    &format!("-s:/fts_pdbsrc/{}", pathstr),
+                ];
+
+                let mut p = Popen::create(
+                    cmd,
+                    PopenConfig {
+                        stdout: Redirection::Pipe,
+                        ..Default::default()
+                    },
+                )?;
 
                 let status = p.wait()?;
+                match status {
+                    ExitStatus::Exited(0) => (),
+                    _ => bail!("File [{:?}] encountered status [{:?}] on cmd [{:?}]", filepath, status, cmd)
+                }
+
+                /*
+                let result : Result<()> = match status {
+                    ExitStatus::Exited(code) => {
+                        if code != 0 {
+                            Err(anyhow!("File [{}] encountered status [{}] with"))
+                        } else {
+                            Ok(())
+                        }
+                    },
+                    _ => {
+                        Error::new(ErrorKind::Other, format!("Unexpected error: [{:?}", status))
+                    }
+                };
+                */
             }
             Err(_) => println!("File not found, skipping: [{:?}]", filepath),
         }
@@ -138,16 +170,15 @@ fn embed(op: EmbedOp) -> anyhow::Result<(), anyhow::Error> {
     Ok(())
 }
 
-fn extract_one(op: ExtractOneOp) -> anyhow::Result<()> {
+fn extract_one(_op: ExtractOneOp) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn extract_all(op: ExtractAllOp) -> anyhow::Result<()> {
+fn extract_all(_op: ExtractAllOp) -> anyhow::Result<()> {
     Ok(())
 }
 
 fn info(op: InfoOp) -> anyhow::Result<()> {
-
     // Load PDB
     let pdbfile = File::open(op.pdb)?;
     let mut pdb = pdb::PDB::open(pdbfile)?;
@@ -183,7 +214,6 @@ fn info(op: InfoOp) -> anyhow::Result<()> {
         .iter()
         .for_each(|stream_name| println!("Stream: [{}]", stream_name.name));
 
-        
     Ok(())
 }
 
