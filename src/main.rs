@@ -51,21 +51,27 @@ fts_pdbsrc --embed --targetpdb foo
 fts_pdbsrc --extract --targetpdb
 */
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> anyhow::Result<()> {
 
     //println!("fts_pdbsrc");
     //println!("  CurrentDir: {}", std::env::current_dir().unwrap().to_string_lossy());
 
     let opt : Opts = Opts::from_args();
     println!("{:?}", opt);
+
+    match opt.op {
+        Op::Embed(op) => embed(op)?,
+        Op::ExtractOne(op) => extract_one(op)?,
+        Op::ExtractAll(op) => extract_all(op)?
+    }
     
     Ok(())
+}
 
-
-    /*
+fn embed(op: EmbedOp) -> anyhow::Result<()> {
     println!("Hello, world!");
 
-    let file = std::fs::File::open("C:/temp/pdb/CrashTest.pdb")?;
+    let file = std::fs::File::open(op.pdb)?;
     let mut pdb = pdb::PDB::open(file)?;
 
     let string_table = pdb.string_table()?;
@@ -92,8 +98,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             line_program.files().for_each(|file| {
                 let filename = string_table.get(file.name)?;
                 println!("File: [{}]", filename);
-                // println!("File: [{}]");
-                // println!("File: [{:?}]", f);
                 Ok(())
             })?;
         }
@@ -103,9 +107,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let stream_names = info.stream_names()?;
     stream_names.iter().for_each(|stream_name| println!("Stream: [{}]", stream_name.name));
 
-
     println!("Goodbye cruel world!");
 
     Ok(())
-    */
+}
+
+fn extract_one(op: ExtractOneOp) -> anyhow::Result<()> {
+    Ok(())
+}
+
+fn extract_all(op: ExtractAllOp) -> anyhow::Result<()> {
+    Ok(())
 }
