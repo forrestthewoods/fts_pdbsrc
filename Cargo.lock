@@ -60,6 +60,7 @@ name = "fts_pdbsrc"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "path-slash",
  "pdb",
  "structopt",
  "subprocess",
@@ -94,6 +95,12 @@ name = "libc"
 version = "0.2.101"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3cb00336871be5ed2c8ed44b60ae9959dc5b9f08539422ed43f09e34ecaeba21"
+
+[[package]]
+name = "path-slash"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3cacbb3c4ff353b534a67fb8d7524d00229da4cb1dc8c79f4db96e375ab5b619"
 
 [[package]]
 name = "pdb"

@@ -7,6 +7,7 @@ edition = "2018"
 
 [dependencies]
 anyhow = "1.0"
+path-slash = "0.1.4"
 pdb = "0.7.0"
 structopt = "0.3.14"
 subprocess = "0.2.7"

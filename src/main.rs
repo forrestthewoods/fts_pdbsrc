@@ -1,4 +1,5 @@
 use anyhow::*;
+use path_slash::PathExt;
 use pdb::*;
 use std::fs::File;
 use std::path::Path;
@@ -84,7 +85,7 @@ fn embed(op: EmbedOp) -> anyhow::Result<(), anyhow::Error> {
     println!("Hello, world!");
 
     // Load PDB
-    let pdbfile = File::open(op.pdb)?;
+    let pdbfile = File::open(&op.pdb)?;
     let mut pdb = pdb::PDB::open(pdbfile)?;
     let string_table = pdb.string_table()?;
 
@@ -102,7 +103,7 @@ fn embed(op: EmbedOp) -> anyhow::Result<(), anyhow::Error> {
                 let filename = string_table.get(file.name)?;
 
                 let filename_utf8 = std::str::from_utf8(filename.as_bytes())?;
-                let filepath = Path::new(filename_utf8);
+                let filepath = Path::new(filename_utf8).to_slash().unwrap();
                 filepaths.push(filepath);
             }
         }
@@ -123,13 +124,23 @@ fn embed(op: EmbedOp) -> anyhow::Result<(), anyhow::Error> {
         match std::fs::File::open(&filepath) {
             Ok(_) => {
                 println!("File found, adding to pdb: [{:?}]", filepath);
-                let pathstr = filepath.to_str().unwrap();
+                let pathstr = filepath.as_str();
+
+                if pathstr.contains("Program Files") {
+                    continue;
+                }
 
                 let cmd = &[
                     "pdbstr",
                     "-w",
-                    &format!("-p:{}", pathstr),
+
+                    &format!("-p:{}", &op.pdb),
                     &format!("-s:/fts_pdbsrc/{}", pathstr),
+                    &format!("-i:{}", pathstr),
+
+                    //"-p:c:/temp/pdb/CrashTest.pdb",
+                    //"-s:ftstest2",
+                    //"-i:c:/temp/cpp/CrashTest/CrashTest.cpp"
                 ];
 
                 let mut p = Popen::create(
@@ -144,7 +155,9 @@ fn embed(op: EmbedOp) -> anyhow::Result<(), anyhow::Error> {
                 match status {
                     ExitStatus::Exited(0) => (),
                     _ => bail!("File [{:?}] encountered status [{:?}] on cmd [{:?}]", filepath, status, cmd)
-                }
+                } 
+                   
+                println!("Successfull executed: [{:?}]", cmd);
 
                 /*
                 let result : Result<()> = match status {
