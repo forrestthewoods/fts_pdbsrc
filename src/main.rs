@@ -1,5 +1,7 @@
 use pdb::*;
-use std::result::Result;
+use std::fs::File;
+use std::io::Read;
+use std::path::Path;
 use structopt::StructOpt;
 
 #[derive(StructOpt, Debug)]
@@ -68,13 +70,55 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn embed(op: EmbedOp) -> anyhow::Result<()> {
+fn embed(op: EmbedOp) -> anyhow::Result<(), anyhow::Error> {
     println!("Hello, world!");
 
-    let file = std::fs::File::open(op.pdb)?;
+    // Load PDB
+    let file = File::open(op.pdb)?;
     let mut pdb = pdb::PDB::open(file)?;
-
     let string_table = pdb.string_table()?;
+
+    // Iterate files
+    let di = pdb.debug_information()?;
+    let mut modules = di.modules()?;
+    while let Some(module) = modules.next()? {
+        if let Some(module_info) = pdb.module_info(&module)? {
+            let line_program = module_info.line_program()?;
+
+            let mut file_iter = line_program.files();
+            while let Some(file) = file_iter.next()? {
+                let filename = string_table.get(file.name)?;
+                
+                let filename_utf8 = std::str::from_utf8(filename.as_bytes())?;
+                let filepath = Path::new(&filename_utf8);
+
+                match std::fs::File::open(&filepath) {
+                    Ok(_) => println!("File (exists): [{}]", filename),
+                    Err(_) => println!("File: [{}]", filename)
+                }
+            }
+        }
+    }
+
+    // Iterate streams
+    let info = pdb.pdb_information()?;
+    let stream_names = info.stream_names()?;
+    stream_names.iter().for_each(|stream_name| println!("Stream: [{}]", stream_name.name));
+
+    println!("Goodbye cruel world!");
+    
+    Ok(())
+}
+
+fn extract_one(op: ExtractOneOp) -> anyhow::Result<()> {
+    Ok(())
+}
+
+fn extract_all(op: ExtractAllOp) -> anyhow::Result<()> {
+    Ok(())
+}
+
+    /*
     let symbol_table = pdb.global_symbols()?;
     let address_map = pdb.address_map()?;
 
@@ -89,33 +133,4 @@ fn embed(op: EmbedOp) -> anyhow::Result<()> {
             _ => {}
         }
     }
-
-    let di = pdb.debug_information()?;
-    let mut modules = di.modules()?;
-    while let Some(module) = modules.next()? {
-        if let Some(module_info) = pdb.module_info(&module)? {
-            let line_program = module_info.line_program()?;
-            line_program.files().for_each(|file| {
-                let filename = string_table.get(file.name)?;
-                println!("File: [{}]", filename);
-                Ok(())
-            })?;
-        }
-    }
-
-    let info = pdb.pdb_information()?;
-    let stream_names = info.stream_names()?;
-    stream_names.iter().for_each(|stream_name| println!("Stream: [{}]", stream_name.name));
-
-    println!("Goodbye cruel world!");
-
-    Ok(())
-}
-
-fn extract_one(op: ExtractOneOp) -> anyhow::Result<()> {
-    Ok(())
-}
-
-fn extract_all(op: ExtractAllOp) -> anyhow::Result<()> {
-    Ok(())
-}
+    */
