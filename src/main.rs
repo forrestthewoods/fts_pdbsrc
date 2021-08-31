@@ -12,7 +12,7 @@ use structopt::StructOpt;
 )]
 struct Opts {
     #[structopt(subcommand)]
-    op : Op,
+    op: Op,
 }
 
 #[derive(StructOpt, Debug)]
@@ -24,7 +24,7 @@ enum Op {
     ExtractOne(ExtractOneOp),
 
     #[structopt(name = "extract_all")]
-    ExtractAll(ExtractAllOp)
+    ExtractAll(ExtractAllOp),
 }
 
 #[derive(Debug, StructOpt)]
@@ -40,13 +40,13 @@ struct ExtractOneOp {
 
     #[structopt(short, long, help = "Single file to extract")]
     file: String,
-}   
+}
 
 #[derive(Debug, StructOpt)]
 struct ExtractAllOp {
     #[structopt(short, long, help = "Target PDB for specified operation")]
     pdb: String,
-}    
+}
 
 /*
 fts_pdbsrc --embed --targetpdb foo
@@ -54,19 +54,18 @@ fts_pdbsrc --extract --targetpdb
 */
 
 fn main() -> anyhow::Result<()> {
-
     //println!("fts_pdbsrc");
     //println!("  CurrentDir: {}", std::env::current_dir().unwrap().to_string_lossy());
 
-    let opt : Opts = Opts::from_args();
+    let opt: Opts = Opts::from_args();
     println!("{:?}", opt);
 
     match opt.op {
         Op::Embed(op) => embed(op)?,
         Op::ExtractOne(op) => extract_one(op)?,
-        Op::ExtractAll(op) => extract_all(op)?
+        Op::ExtractAll(op) => extract_all(op)?,
     }
-    
+
     Ok(())
 }
 
@@ -88,13 +87,15 @@ fn embed(op: EmbedOp) -> anyhow::Result<(), anyhow::Error> {
             let mut file_iter = line_program.files();
             while let Some(file) = file_iter.next()? {
                 let filename = string_table.get(file.name)?;
-                
+
                 let filename_utf8 = std::str::from_utf8(filename.as_bytes())?;
                 let filepath = Path::new(&filename_utf8);
 
                 match std::fs::File::open(&filepath) {
-                    Ok(_) => println!("File (exists): [{}]", filename),
-                    Err(_) => println!("File: [{}]", filename)
+                    Ok(_) => {
+                        println!("File (exists): [{}]", filename);
+                    }
+                    Err(_) => println!("File not found, skipping: [{}]", filename),
                 }
             }
         }
@@ -103,10 +104,12 @@ fn embed(op: EmbedOp) -> anyhow::Result<(), anyhow::Error> {
     // Iterate streams
     let info = pdb.pdb_information()?;
     let stream_names = info.stream_names()?;
-    stream_names.iter().for_each(|stream_name| println!("Stream: [{}]", stream_name.name));
+    stream_names
+        .iter()
+        .for_each(|stream_name| println!("Stream: [{}]", stream_name.name));
 
     println!("Goodbye cruel world!");
-    
+
     Ok(())
 }
 
@@ -118,19 +121,19 @@ fn extract_all(op: ExtractAllOp) -> anyhow::Result<()> {
     Ok(())
 }
 
-    /*
-    let symbol_table = pdb.global_symbols()?;
-    let address_map = pdb.address_map()?;
+/*
+let symbol_table = pdb.global_symbols()?;
+let address_map = pdb.address_map()?;
 
-    let mut symbols = symbol_table.iter();
-    while let Some(symbol) = symbols.next()? {
-        match symbol.parse() {
-            Ok(pdb::SymbolData::Public(data)) if data.function => {
-                // we found the location of a function!
-                let rva = data.offset.to_rva(&address_map).unwrap_or_default();
-                println!("{} is {}", rva, data.name);
-            }
-            _ => {}
+let mut symbols = symbol_table.iter();
+while let Some(symbol) = symbols.next()? {
+    match symbol.parse() {
+        Ok(pdb::SymbolData::Public(data)) if data.function => {
+            // we found the location of a function!
+            let rva = data.offset.to_rva(&address_map).unwrap_or_default();
+            println!("{} is {}", rva, data.name);
         }
+        _ => {}
     }
-    */
+}
+*/
