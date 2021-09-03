@@ -45,6 +45,9 @@ struct ExtractOneOp {
 
     #[structopt(short, long, help = "Single file to extract")]
     file: String,
+
+    #[structopt(short, long, help = "Out directory to extract files")]
+    outdir: String,
 }
 
 #[derive(Debug, StructOpt)]
@@ -183,7 +186,16 @@ fn embed(op: EmbedOp) -> anyhow::Result<(), anyhow::Error> {
     Ok(())
 }
 
-fn extract_one(_op: ExtractOneOp) -> anyhow::Result<()> {
+fn extract_one(op: ExtractOneOp) -> anyhow::Result<()> {
+
+    let cmd = &[
+        "pdbstr", // executable
+        "-r", // read       
+        &format!("-p:{}", op.pdb), // pdb path
+        &format!("-s:/fts_pdbsrc/{}", op.file), // filepath (as stream)
+        &format!("-i:%LOCALAPPDATA%/fts/fts_pdbsrc/{}", op.file), // out file
+    ];
+
     Ok(())
 }
 
