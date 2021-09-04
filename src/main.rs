@@ -2,7 +2,9 @@ use anyhow::*;
 use path_slash::PathExt;
 use pdb::*;
 use std::fs::{File};
-use std::path::Path;
+use std::io::Read;
+use std::net::{TcpListener, TcpStream};
+use std::path::{Path, PathBuf};
 use structopt::StructOpt;
 use subprocess::*;
 use walkdir::WalkDir;
@@ -249,8 +251,9 @@ fn info(op: InfoOp) -> anyhow::Result<()> {
 }
 
 fn watch(_: WatchOp) -> anyhow::Result<()> {
+    // Find relevant pdbs (pdbs containing srcsrv w/ VERCTRL=fts_pdbsrc
+    let mut relevant_pdbs : Vec<PathBuf> = Default::default();
     for entry in WalkDir::new("c:/temp/pdb").into_iter().filter_map(|e| e.ok()) {
-
         // Look for files
         if !entry.file_type().is_file() {
             continue;
@@ -276,14 +279,46 @@ fn watch(_: WatchOp) -> anyhow::Result<()> {
             let srcsrv_str : &str = std::str::from_utf8(&srcsrv_stream)?;
 
             Ok(srcsrv_str.contains("VERCTRL=fts_pdbsrc"))
-            //Ok(srcsrv_str.contains("VERCTRL=fts_pdbsrc"))
         }().unwrap_or_default();
         
         if !is_fts_pdbsrc {
             continue;
         }
 
-        println!("Found .pdb with fts_pdbsrc source indexing! [{:?}]", entry.path());
+        relevant_pdbs.push(entry.path().to_path_buf());
+    }
+
+    let handle_connection = |stream: &mut TcpStream| -> anyhow::Result<()> {
+        let mut packet_size_buf : [u8; 2] = Default::default();
+        let mut packet_buf : Vec<u8> = Vec::with_capacity(64);
+        loop {
+            // Read packet size
+            stream.read_exact(&mut packet_size_buf)?;
+            let packet_size = u16::from_ne_bytes(packet_size_buf);
+
+            // Read packet
+            let packet_slice = &mut packet_buf[..packet_size as usize];
+            stream.read_exact(packet_slice)?;
+
+            // Parse and do something with packet
+        }
+    };
+
+    // Listen
+    let listener = TcpListener::bind("127.0.0.1:23685")?; // port chosen randomly
+    for stream in listener.incoming() {
+        match stream {
+            Ok(mut stream) => {
+                println!("New connection: {}", stream.peer_addr().unwrap());
+                std::thread::spawn(move|| {
+                    let _ = handle_connection(&mut stream);
+                    stream.shutdown(std::net::Shutdown::Both).unwrap();
+                });
+            }
+            Err(e) => {
+                println!("TCP listener error: {}", e);
+            }
+        }
     }
 
     Ok(())
