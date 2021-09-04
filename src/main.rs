@@ -1,8 +1,8 @@
 use anyhow::*;
 use path_slash::PathExt;
 use pdb::*;
-use serde::{Serialize, Deserialize};
-use std::fs::{File};
+use serde::{Deserialize, Serialize};
+use std::fs::File;
 use std::io::Read;
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
@@ -74,10 +74,9 @@ struct WatchOp {}
 
 #[derive(Serialize, Deserialize, Debug)]
 enum Message {
-   GetPdbPaths,
-   PdbPaths(Vec<PathBuf>),
+    GetPdbPaths,
+    PdbPaths(Vec<PathBuf>),
 }
-
 
 /*
 fts_pdbsrc --embed --targetpdb foo
@@ -260,8 +259,11 @@ fn info(op: InfoOp) -> anyhow::Result<()> {
 
 fn watch(_: WatchOp) -> anyhow::Result<()> {
     // Find relevant pdbs (pdbs containing srcsrv w/ VERCTRL=fts_pdbsrc
-    let mut relevant_pdbs : Vec<PathBuf> = Default::default();
-    for entry in WalkDir::new("c:/temp/pdb").into_iter().filter_map(|e| e.ok()) {
+    let mut relevant_pdbs: Vec<PathBuf> = Default::default();
+    for entry in WalkDir::new("c:/temp/pdb")
+        .into_iter()
+        .filter_map(|e| e.ok())
+    {
         // Look for files
         if !entry.file_type().is_file() {
             continue;
@@ -281,14 +283,15 @@ fn watch(_: WatchOp) -> anyhow::Result<()> {
             // Open PDB
             let pdbfile = File::open(entry.path())?;
             let mut pdb = pdb::PDB::open(pdbfile)?;
-            
+
             // Get srcsrv stream
             let srcsrv_stream = pdb.named_stream("srcsrv".as_bytes())?;
-            let srcsrv_str : &str = std::str::from_utf8(&srcsrv_stream)?;
+            let srcsrv_str: &str = std::str::from_utf8(&srcsrv_stream)?;
 
             Ok(srcsrv_str.contains("VERCTRL=fts_pdbsrc"))
-        }().unwrap_or_default();
-        
+        }()
+        .unwrap_or_default();
+
         if !is_fts_pdbsrc {
             continue;
         }
@@ -297,8 +300,8 @@ fn watch(_: WatchOp) -> anyhow::Result<()> {
     }
 
     let handle_connection = |stream: &mut TcpStream| -> anyhow::Result<()> {
-        let mut packet_size_buf : [u8; 2] = Default::default();
-        let mut packet_buf : Vec<u8> = Vec::with_capacity(64);
+        let mut packet_size_buf: [u8; 2] = Default::default();
+        let mut packet_buf: Vec<u8> = Vec::with_capacity(64);
         loop {
             // Read packet size
             stream.read_exact(&mut packet_size_buf)?;
@@ -318,7 +321,7 @@ fn watch(_: WatchOp) -> anyhow::Result<()> {
         match stream {
             Ok(mut stream) => {
                 println!("New connection: {}", stream.peer_addr().unwrap());
-                std::thread::spawn(move|| {
+                std::thread::spawn(move || {
                     let _ = handle_connection(&mut stream);
                     stream.shutdown(std::net::Shutdown::Both).unwrap();
                 });
