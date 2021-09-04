@@ -1,6 +1,7 @@
 use anyhow::*;
 use path_slash::PathExt;
 use pdb::*;
+use serde::{Serialize, Deserialize};
 use std::fs::{File};
 use std::io::Read;
 use std::net::{TcpListener, TcpStream};
@@ -70,6 +71,13 @@ struct InfoOp {
 
 #[derive(Debug, StructOpt)]
 struct WatchOp {}
+
+#[derive(Serialize, Deserialize, Debug)]
+enum Message {
+   GetPdbPaths,
+   PdbPaths(Vec<PathBuf>),
+}
+
 
 /*
 fts_pdbsrc --embed --targetpdb foo
