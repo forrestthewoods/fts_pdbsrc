@@ -1,10 +1,11 @@
 use anyhow::*;
 use path_slash::PathExt;
 use pdb::*;
-use std::fs::File;
+use std::fs::{File};
 use std::path::Path;
 use structopt::StructOpt;
 use subprocess::*;
+use walkdir::WalkDir;
 
 #[derive(StructOpt, Debug)]
 #[structopt(
@@ -30,6 +31,9 @@ enum Op {
 
     #[structopt(name = "info")]
     Info(InfoOp),
+
+    #[structopt(name = "watch")]
+    Watch(WatchOp),
 }
 
 #[derive(Debug, StructOpt)]
@@ -62,23 +66,23 @@ struct InfoOp {
     pdb: String,
 }
 
+#[derive(Debug, StructOpt)]
+struct WatchOp {}
+
 /*
 fts_pdbsrc --embed --targetpdb foo
 fts_pdbsrc --extract --targetpdb
 */
 
 fn main() -> anyhow::Result<()> {
-    //println!("fts_pdbsrc");
-    //println!("  CurrentDir: {}", std::env::current_dir().unwrap().to_string_lossy());
-
     let opt: Opts = Opts::from_args();
-    println!("{:?}", opt);
 
     match opt.op {
         Op::Embed(op) => embed(op)?,
         Op::ExtractOne(op) => extract_one(op)?,
         Op::ExtractAll(op) => extract_all(op)?,
         Op::Info(op) => info(op)?,
+        Op::Watch(op) => watch(op)?,
     }
 
     Ok(())
@@ -136,11 +140,9 @@ fn embed(op: EmbedOp) -> anyhow::Result<(), anyhow::Error> {
                 let cmd = &[
                     "pdbstr",
                     "-w",
-
                     &format!("-p:{}", &op.pdb),
                     &format!("-s:/fts_pdbsrc/{}", pathstr),
                     &format!("-i:{}", pathstr),
-
                     //"-p:c:/temp/pdb/CrashTest.pdb",
                     //"-s:ftstest2",
                     //"-i:c:/temp/cpp/CrashTest/CrashTest.cpp"
@@ -157,9 +159,14 @@ fn embed(op: EmbedOp) -> anyhow::Result<(), anyhow::Error> {
                 let status = p.wait()?;
                 match status {
                     ExitStatus::Exited(0) => (),
-                    _ => bail!("File [{:?}] encountered status [{:?}] on cmd [{:?}]", filepath, status, cmd)
-                } 
-                   
+                    _ => bail!(
+                        "File [{:?}] encountered status [{:?}] on cmd [{:?}]",
+                        filepath,
+                        status,
+                        cmd
+                    ),
+                }
+
                 println!("Successfull executed: [{:?}]", cmd);
 
                 /*
@@ -187,12 +194,11 @@ fn embed(op: EmbedOp) -> anyhow::Result<(), anyhow::Error> {
 }
 
 fn extract_one(op: ExtractOneOp) -> anyhow::Result<()> {
-
-    let cmd = &[
-        "pdbstr", // executable
-        "-r", // read       
-        &format!("-p:{}", op.pdb), // pdb path
-        &format!("-s:/fts_pdbsrc/{}", op.file), // filepath (as stream)
+    let _cmd = &[
+        "pdbstr",                                                 // executable
+        "-r",                                                     // read
+        &format!("-p:{}", op.pdb),                                // pdb path
+        &format!("-s:/fts_pdbsrc/{}", op.file),                   // filepath (as stream)
         &format!("-i:%LOCALAPPDATA%/fts/fts_pdbsrc/{}", op.file), // out file
     ];
 
@@ -238,6 +244,47 @@ fn info(op: InfoOp) -> anyhow::Result<()> {
     stream_names
         .iter()
         .for_each(|stream_name| println!("Stream: [{}]", stream_name.name));
+
+    Ok(())
+}
+
+fn watch(_: WatchOp) -> anyhow::Result<()> {
+    for entry in WalkDir::new("c:/temp/pdb").into_iter().filter_map(|e| e.ok()) {
+
+        // Look for files
+        if !entry.file_type().is_file() {
+            continue;
+        }
+
+        // Look for files that end with .pdb
+        if !entry
+            .file_name()
+            .to_str()
+            .map_or(false, |filename| filename.ends_with(".pdb"))
+        {
+            continue;
+        }
+
+        // Check if this pdb is an fts
+        let is_fts_pdbsrc = || -> anyhow::Result<bool> {
+            // Open PDB
+            let pdbfile = File::open(entry.path())?;
+            let mut pdb = pdb::PDB::open(pdbfile)?;
+            
+            // Get srcsrv stream
+            let srcsrv_stream = pdb.named_stream("srcsrv".as_bytes())?;
+            let srcsrv_str : &str = std::str::from_utf8(&srcsrv_stream)?;
+
+            Ok(srcsrv_str.contains("VERCTRL=fts_pdbsrc"))
+            //Ok(srcsrv_str.contains("VERCTRL=fts_pdbsrc"))
+        }().unwrap_or_default();
+        
+        if !is_fts_pdbsrc {
+            continue;
+        }
+
+        println!("Found .pdb with fts_pdbsrc source indexing! [{:?}]", entry.path());
+    }
 
     Ok(())
 }

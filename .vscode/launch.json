@@ -5,11 +5,12 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Debug (Windows)",
+            "name": "Watch (Debug)",
             "type": "cppvsdbg",
             "request": "launch",
-            "program": "${workspaceRoot}/target/debug/fts_fuzzy_find.exe",
+            "program": "${workspaceRoot}/target/debug/fts_pdbsrc.exe",
             "args": [
+                "watch"
             ],
             "stopAtEntry": false,
             "cwd": "${workspaceRoot}",
