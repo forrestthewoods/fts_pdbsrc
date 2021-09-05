@@ -2,7 +2,7 @@ use anyhow::*;
 use path_slash::PathExt;
 use pdb::*;
 use serde::{Deserialize, Serialize};
-use std::cell::RefCell;
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -77,10 +77,12 @@ struct WatchOp {}
 #[derive(Serialize, Deserialize, Debug)]
 enum Message {
     FindPdb(Uuid),
-    FoundPdb((Uuid, PathBuf))
+    FoundPdb((Uuid, Option<PathBuf>))
 }
 
 fn send_message(stream: &mut TcpStream, message: Message) -> anyhow::Result<()> {
+    println!("Sending message: [{:?}]", message);
+
     // Serialize message
     let buf = rmp_serde::to_vec(&message).unwrap();
 
@@ -101,11 +103,14 @@ fn read_message(stream: &mut TcpStream) -> anyhow::Result<Message> {
     let packet_size = u16::from_ne_bytes(packet_size_buf);
 
     // Read packet
-    let mut packet_buf = Vec::with_capacity(packet_size as usize); // TODO: make thread_local
+    let mut packet_buf = vec![0; packet_size as usize]; // TODO: make thread_local
     stream.read_exact(&mut packet_buf)?;
 
     // Deserialize
     let message : Message = rmp_serde::from_read_ref(&packet_buf)?;
+
+    println!("Received message: [{:?}]", message);
+
 
     Ok(message)
 }
@@ -235,14 +240,34 @@ fn embed(op: EmbedOp) -> anyhow::Result<(), anyhow::Error> {
 }
 
 fn extract_one(op: ExtractOneOp) -> anyhow::Result<()> {
+    // Temp: span watch
+    std::thread::spawn(|| watch(WatchOp{}));
+
     // Query server
     match TcpStream::connect("localhost:23685") {
         Ok(mut stream) => {
             println!("Successfully connected to localhost:23685");
 
-            send_message(&mut stream, Message::FindPdb(Uuid::parse_str("936DA01F9ABD4d9d80C702AF85C822A8")?))?;
-            
+            // Ask service for PDB path
+            let uuid = Uuid::parse_str("936DA01F9ABD4d9d80C702AF85C822A8")?;
+            send_message(&mut stream, Message::FindPdb(uuid))?;
+
             println!("Sent message");
+            
+            // Wait for response
+            let response = read_message(&mut stream)?;
+
+            println!("Received response: [{:?}]", response);
+            
+            // Go ahead and close stream
+            drop(stream);
+
+            match response {
+                Message::FoundPdb((uuid, Some(path))) => {
+                    println!("Success! [{}] [{:?}]", uuid, path);
+                },
+                _ => return Err(anyhow!("extract_one queried service for PDB with uuid [{}], but failed with response: [{:?}]", uuid, response))
+            }
 
 /*
             let msg = b"Hello!";
@@ -288,9 +313,6 @@ fn extract_all(_op: ExtractAllOp) -> anyhow::Result<()> {
 }
 
 fn info(op: InfoOp) -> anyhow::Result<()> {
-    // Temp: span watch
-    std::thread::spawn(|| watch(WatchOp{}));
-
     // Load PDB
     let pdbfile = File::open(op.pdb)?;
     let mut pdb = pdb::PDB::open(pdbfile)?;
@@ -331,7 +353,7 @@ fn info(op: InfoOp) -> anyhow::Result<()> {
 
 fn watch(_: WatchOp) -> anyhow::Result<()> {
     // Find relevant pdbs (pdbs containing srcsrv w/ VERCTRL=fts_pdbsrc
-    let mut relevant_pdbs: std::collections::HashMap<Uuid, PathBuf> = Default::default();
+    let mut relevant_pdbs: HashMap<Uuid, PathBuf> = Default::default();
 
     for entry in WalkDir::new("c:/temp/pdb")
         .into_iter()
@@ -373,46 +395,36 @@ fn watch(_: WatchOp) -> anyhow::Result<()> {
         }();
     }
 
-    let handle_connection = |mut stream: &mut TcpStream| -> anyhow::Result<()> {
-        let mut packet_size_buf: [u8; 2] = Default::default();
-        let mut packet_buf: Vec<u8> = Vec::with_capacity(64);
-
+    let handle_connection = |mut stream: &mut TcpStream, pdb_db: &HashMap<Uuid, PathBuf>| -> anyhow::Result<()> {
         loop {
             let msg = read_message(&mut stream)?;
+            println!("service received message: [{:?}]", msg);
             match msg {
                 Message::FindPdb(uuid) => {
+                    match pdb_db.get(&uuid) {
+                        Some(path) => send_message(&mut stream, Message::FoundPdb((uuid, Some(path.clone()))))?,
+                        None => send_message(&mut stream, Message::FoundPdb((uuid, None)))?
+                    }
                 },
                 _ => return Err(anyhow!("Unexpected message: [{:?}]", msg))
             }
-        }
-
-        loop {
-            // Read packet size
-            stream.read_exact(&mut packet_size_buf)?;
-            let packet_size = u16::from_ne_bytes(packet_size_buf);
-
-            // Read packet
-            let packet_slice = &mut packet_buf[..packet_size as usize];
-            stream.read_exact(packet_slice)?;
-
-            // Parse and do something with packet
         }
     };
 
     // Listen
     let listener = TcpListener::bind("localhost:23685")?; // port chosen randomly
+    println!("Listening");
     for stream in listener.incoming() {
         match stream {
             Ok(mut stream) => {
                 println!("New connection: {}", stream.peer_addr().unwrap());
+                let pdb_copy = relevant_pdbs.clone();
                 std::thread::spawn(move || {
-                    let _ = handle_connection(&mut stream);
+                    let _ = handle_connection(&mut stream, &pdb_copy);
                     stream.shutdown(std::net::Shutdown::Both).unwrap();
                 });
             }
-            Err(e) => {
-                println!("TCP listener error: {}", e);
-            }
+            Err(_) => (), // silently consume
         }
     }
 
