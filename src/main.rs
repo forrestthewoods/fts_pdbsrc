@@ -80,50 +80,31 @@ enum Message {
     FoundPdb((Uuid, Option<PathBuf>))
 }
 
-fn send_message(stream: &mut TcpStream, message: Message) -> anyhow::Result<()> {
-    println!("Sending message: [{:?}]", message);
-
-    // Serialize message
-    let buf = rmp_serde::to_vec(&message).unwrap();
-
-    // Write packet size
-    let packet_size = u16::to_ne_bytes(buf.len() as u16);
-    stream.write_all(&packet_size)?;
-
-    // Write message
-    stream.write_all(&buf)?;
-
-    Ok(())
-}
-
-fn read_message(stream: &mut TcpStream) -> anyhow::Result<Message> {
-    // Read packet size
-    let mut packet_size_buf: [u8; 2] = Default::default();
-    stream.read_exact(&mut packet_size_buf)?;
-    let packet_size = u16::from_ne_bytes(packet_size_buf);
-
-    // Read packet
-    let mut packet_buf = vec![0; packet_size as usize]; // TODO: make thread_local
-    stream.read_exact(&mut packet_buf)?;
-
-    // Deserialize
-    let message : Message = rmp_serde::from_read_ref(&packet_buf)?;
-
-    println!("Received message: [{:?}]", message);
-
-
-    Ok(message)
-}
 
 /*
 fts_pdbsrc --embed --targetpdb foo
 fts_pdbsrc --extract --targetpdb
 */
 
-fn main() -> anyhow::Result<()> {
-    let opt: Opts = Opts::from_args();
+fn main() {
+    // Parse args
+    let opts: Opts = Opts::from_args();
 
-    match opt.op {
+    // Run program
+    let exit_code = match run(opts) {
+        Ok(_) => 0,
+        Err(err) => {
+            eprint!("Error: {:?}", err);
+            1
+        }
+    };
+
+    // Result result
+    std::process::exit(exit_code);
+}
+
+fn run(opts: Opts) -> anyhow::Result<()> {
+    match opts.op {
         Op::Embed(op) => embed(op)?,
         Op::ExtractOne(op) => extract_one(op)?,
         Op::ExtractAll(op) => extract_all(op)?,
@@ -246,19 +227,13 @@ fn extract_one(op: ExtractOneOp) -> anyhow::Result<()> {
     // Query server
     match TcpStream::connect("localhost:23685") {
         Ok(mut stream) => {
-            println!("Successfully connected to localhost:23685");
-
             // Ask service for PDB path
             let uuid = Uuid::parse_str("936DA01F9ABD4d9d80C702AF85C822A8")?;
             send_message(&mut stream, Message::FindPdb(uuid))?;
 
-            println!("Sent message");
-            
             // Wait for response
             let response = read_message(&mut stream)?;
 
-            println!("Received response: [{:?}]", response);
-            
             // Go ahead and close stream
             drop(stream);
 
@@ -398,7 +373,6 @@ fn watch(_: WatchOp) -> anyhow::Result<()> {
     let handle_connection = |mut stream: &mut TcpStream, pdb_db: &HashMap<Uuid, PathBuf>| -> anyhow::Result<()> {
         loop {
             let msg = read_message(&mut stream)?;
-            println!("service received message: [{:?}]", msg);
             match msg {
                 Message::FindPdb(uuid) => {
                     match pdb_db.get(&uuid) {
@@ -413,20 +387,20 @@ fn watch(_: WatchOp) -> anyhow::Result<()> {
 
     // Listen
     let listener = TcpListener::bind("localhost:23685")?; // port chosen randomly
-    println!("Listening");
     for stream in listener.incoming() {
         match stream {
             Ok(mut stream) => {
-                println!("New connection: {}", stream.peer_addr().unwrap());
                 let pdb_copy = relevant_pdbs.clone();
                 std::thread::spawn(move || {
                     let _ = handle_connection(&mut stream, &pdb_copy);
                     stream.shutdown(std::net::Shutdown::Both).unwrap();
                 });
             }
-            Err(_) => (), // silently consume
+            Err(e) => println!("Error accepting listener: [{}]", e)
         }
     }
+
+    println!("No more listeners?");
 
     Ok(())
 }
@@ -447,3 +421,34 @@ while let Some(symbol) = symbols.next()? {
     }
 }
 */
+
+
+fn send_message(stream: &mut TcpStream, message: Message) -> anyhow::Result<()> {
+    // Serialize message
+    let buf = rmp_serde::to_vec(&message).unwrap();
+
+    // Write packet size
+    let packet_size = u16::to_ne_bytes(buf.len() as u16);
+    stream.write_all(&packet_size)?;
+
+    // Write message
+    stream.write_all(&buf)?;
+
+    Ok(())
+}
+
+fn read_message(stream: &mut TcpStream) -> anyhow::Result<Message> {
+    // Read packet size
+    let mut packet_size_buf: [u8; 2] = Default::default();
+    stream.read_exact(&mut packet_size_buf)?;
+    let packet_size = u16::from_ne_bytes(packet_size_buf);
+
+    // Read packet
+    let mut packet_buf = vec![0; packet_size as usize]; // TODO: make thread_local
+    stream.read_exact(&mut packet_buf)?;
+
+    // Deserialize
+    let message : Message = rmp_serde::from_read_ref(&packet_buf)?;
+
+    Ok(message)
+}
