@@ -36,5 +36,22 @@
             "environment": [],
             "externalConsole": false,
         },
+        {
+            "name": "Embed (Debug)",
+            "type": "cppvsdbg",
+            "request": "launch",
+            "program": "${workspaceRoot}/target/debug/fts_pdbsrc.exe",
+            "args": [
+                "embed",
+                "--pdb",
+                "c:/temp/pdb/CrashTest.pdb",
+                "--roots",
+                "c:/temp/cpp"
+            ],
+            "stopAtEntry": false,
+            "cwd": "${workspaceRoot}",
+            "environment": [],
+            "externalConsole": false,
+        },
     ]
 }

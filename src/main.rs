@@ -1,9 +1,8 @@
 use anyhow::*;
-use path_slash::PathExt;
 use pdb::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::fs::File;
+use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
@@ -45,6 +44,9 @@ enum Op {
 struct EmbedOp {
     #[structopt(short, long, help = "Target PDB for specified operation")]
     pdb: String,
+
+    #[structopt(short, long, parse(from_os_str), help = "Root for files to embed")]
+    roots: Vec<PathBuf>,
 }
 
 #[derive(Debug, StructOpt)]
@@ -77,9 +79,8 @@ struct WatchOp {}
 #[derive(Serialize, Deserialize, Debug)]
 enum Message {
     FindPdb(Uuid),
-    FoundPdb((Uuid, Option<PathBuf>))
+    FoundPdb((Uuid, Option<PathBuf>)),
 }
-
 
 /*
 fts_pdbsrc --embed --targetpdb foo
@@ -116,7 +117,11 @@ fn run(opts: Opts) -> anyhow::Result<()> {
 }
 
 fn embed(op: EmbedOp) -> anyhow::Result<(), anyhow::Error> {
-    println!("Hello, world!");
+    let canonical_roots: Vec<PathBuf> = op
+        .roots
+        .iter()
+        .filter_map(|root| fs::canonicalize(root).ok())
+        .collect();
 
     // Load PDB
     let pdbfile = File::open(&op.pdb)?;
@@ -124,7 +129,7 @@ fn embed(op: EmbedOp) -> anyhow::Result<(), anyhow::Error> {
     let string_table = pdb.string_table()?;
 
     // Iterate files
-    let mut filepaths: Vec<_> = Default::default();
+    let mut filepaths: Vec<(PathBuf, PathBuf)> = Default::default();
 
     let di = pdb.debug_information()?;
     let mut modules = di.modules()?;
@@ -134,11 +139,44 @@ fn embed(op: EmbedOp) -> anyhow::Result<(), anyhow::Error> {
 
             let mut file_iter = line_program.files();
             while let Some(file) = file_iter.next()? {
-                let filename = string_table.get(file.name)?;
+                let raw_filepath = string_table.get(file.name)?;
 
-                let filename_utf8 = std::str::from_utf8(filename.as_bytes())?;
-                let filepath = Path::new(filename_utf8).to_slash().unwrap();
-                filepaths.push(filepath);
+                let filename_utf8 = std::str::from_utf8(raw_filepath.as_bytes())?;
+                let filepath = Path::new(filename_utf8);
+
+                if filename_utf8.contains("CrashTest") {
+                    let mut x = 5;
+                    x += 3;
+                }
+
+                if let Ok(canonical_filepath) = fs::canonicalize(&filepath) {
+                    match canonical_roots
+                        .iter()
+                        .filter_map(|root| {
+                            canonical_filepath.starts_with(root).then(|| {
+                                canonical_filepath
+                                    .iter()
+                                    .skip(root.iter().count())
+                                    .collect()
+                            })
+                        })
+                        .next()
+                    {
+                        Some(subpath) => {
+                            println!("Found! Path: [{:?}]. Relpath: [{:?}]", &filepath, &subpath);
+                            filepaths.push((filepath.to_owned(), subpath))
+                        }
+                        None => {}
+                    }
+                }
+
+                /*
+                if .any(|root| canonical_filepath.starts_with(root)) {
+
+                    let subpath : PathBuf = canonical_filepath.iter().skip(root.len()).collect();
+                    filepaths.push((filepath, PathBuf::new());
+                }
+                */
             }
         }
     }
@@ -152,7 +190,7 @@ fn embed(op: EmbedOp) -> anyhow::Result<(), anyhow::Error> {
 
     // Close PDB
     drop(pdb);
-
+    /*
     // Now iterate files
     for filepath in filepaths {
         match std::fs::File::open(&filepath) {
@@ -199,15 +237,14 @@ fn embed(op: EmbedOp) -> anyhow::Result<(), anyhow::Error> {
             Err(_) => println!("File not found, skipping: [{:?}]", filepath),
         }
     }
-
-    println!("Goodbye cruel world!");
+    */
 
     Ok(())
 }
 
 fn extract_one(op: ExtractOneOp) -> anyhow::Result<()> {
     // Temp: span watch
-    std::thread::spawn(|| watch(WatchOp{}));
+    std::thread::spawn(|| watch(WatchOp {}));
 
     // Query server
     match TcpStream::connect("localhost:23685") {
@@ -236,34 +273,33 @@ fn extract_one(op: ExtractOneOp) -> anyhow::Result<()> {
             let pdbfile = File::open(op.pdb)?;
             let mut pdb = pdb::PDB::open(pdbfile)?;
 
+            /*
+                        let msg = b"Hello!";
 
-/*
-            let msg = b"Hello!";
+                        stream.write(msg).unwrap();
+                        println!("Sent Hello, awaiting reply...");
 
-            stream.write(msg).unwrap();
-            println!("Sent Hello, awaiting reply...");
-
-            let mut data = [0 as u8; 6]; // using 6 byte buffer
-            match stream.read_exact(&mut data) {
-                Ok(_) => {
-                    if &data == msg {
-                        println!("Reply is ok!");
-                    } else {
-                        let text = from_utf8(&data).unwrap();
-                        println!("Unexpected reply: {}", text);
-                    }
-                },
-                Err(e) => {
-                    println!("Failed to receive data: {}", e);
-                }
-            }
-*/
-        },
+                        let mut data = [0 as u8; 6]; // using 6 byte buffer
+                        match stream.read_exact(&mut data) {
+                            Ok(_) => {
+                                if &data == msg {
+                                    println!("Reply is ok!");
+                                } else {
+                                    let text = from_utf8(&data).unwrap();
+                                    println!("Unexpected reply: {}", text);
+                                }
+                            },
+                            Err(e) => {
+                                println!("Failed to receive data: {}", e);
+                            }
+                        }
+            */
+        }
         Err(e) => {
             println!("Failed to connect: {}", e);
         }
     }
-    
+
     // Run extract command
     /*
     let _cmd = &[
@@ -365,17 +401,19 @@ fn watch(_: WatchOp) -> anyhow::Result<()> {
         }();
     }
 
-    let handle_connection = |mut stream: &mut TcpStream, pdb_db: &HashMap<Uuid, PathBuf>| -> anyhow::Result<()> {
+    let handle_connection = |mut stream: &mut TcpStream,
+                             pdb_db: &HashMap<Uuid, PathBuf>|
+     -> anyhow::Result<()> {
         loop {
             let msg = read_message(&mut stream)?;
             match msg {
-                Message::FindPdb(uuid) => {
-                    match pdb_db.get(&uuid) {
-                        Some(path) => send_message(&mut stream, Message::FoundPdb((uuid, Some(path.clone()))))?,
-                        None => send_message(&mut stream, Message::FoundPdb((uuid, None)))?
+                Message::FindPdb(uuid) => match pdb_db.get(&uuid) {
+                    Some(path) => {
+                        send_message(&mut stream, Message::FoundPdb((uuid, Some(path.clone()))))?
                     }
+                    None => send_message(&mut stream, Message::FoundPdb((uuid, None)))?,
                 },
-                _ => return Err(anyhow!("Unexpected message: [{:?}]", msg))
+                _ => return Err(anyhow!("Unexpected message: [{:?}]", msg)),
             }
         }
     };
@@ -391,7 +429,7 @@ fn watch(_: WatchOp) -> anyhow::Result<()> {
                     stream.shutdown(std::net::Shutdown::Both).unwrap();
                 });
             }
-            Err(e) => println!("Error accepting listener: [{}]", e)
+            Err(e) => println!("Error accepting listener: [{}]", e),
         }
     }
 
@@ -416,7 +454,6 @@ while let Some(symbol) = symbols.next()? {
     }
 }
 */
-
 
 fn send_message(stream: &mut TcpStream, message: Message) -> anyhow::Result<()> {
     // Serialize message
@@ -443,7 +480,7 @@ fn read_message(stream: &mut TcpStream) -> anyhow::Result<Message> {
     stream.read_exact(&mut packet_buf)?;
 
     // Deserialize
-    let message : Message = rmp_serde::from_read_ref(&packet_buf)?;
+    let message: Message = rmp_serde::from_read_ref(&packet_buf)?;
 
     Ok(message)
 }
