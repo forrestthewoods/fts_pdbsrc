@@ -2,12 +2,14 @@ use anyhow::*;
 use path_slash::PathExt;
 use pdb::*;
 use serde::{Deserialize, Serialize};
+use std::cell::RefCell;
 use std::fs::File;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use structopt::StructOpt;
 use subprocess::*;
+use uuid::Uuid;
 use walkdir::WalkDir;
 
 #[derive(StructOpt, Debug)]
@@ -74,8 +76,38 @@ struct WatchOp {}
 
 #[derive(Serialize, Deserialize, Debug)]
 enum Message {
-    GetPdbPaths,
-    PdbPaths(Vec<PathBuf>),
+    FindPdb(Uuid),
+    FoundPdb((Uuid, PathBuf))
+}
+
+fn send_message(stream: &mut TcpStream, message: Message) -> anyhow::Result<()> {
+    // Serialize message
+    let buf = rmp_serde::to_vec(&message).unwrap();
+
+    // Write packet size
+    let packet_size = u16::to_ne_bytes(buf.len() as u16);
+    stream.write_all(&packet_size)?;
+
+    // Write message
+    stream.write_all(&buf)?;
+
+    Ok(())
+}
+
+fn read_message(stream: &mut TcpStream) -> anyhow::Result<Message> {
+    // Read packet size
+    let mut packet_size_buf: [u8; 2] = Default::default();
+    stream.read_exact(&mut packet_size_buf)?;
+    let packet_size = u16::from_ne_bytes(packet_size_buf);
+
+    // Read packet
+    let mut packet_buf = Vec::with_capacity(packet_size as usize); // TODO: make thread_local
+    stream.read_exact(&mut packet_buf)?;
+
+    // Deserialize
+    let message : Message = rmp_serde::from_read_ref(&packet_buf)?;
+
+    Ok(message)
 }
 
 /*
@@ -203,6 +235,43 @@ fn embed(op: EmbedOp) -> anyhow::Result<(), anyhow::Error> {
 }
 
 fn extract_one(op: ExtractOneOp) -> anyhow::Result<()> {
+    // Query server
+    match TcpStream::connect("localhost:23685") {
+        Ok(mut stream) => {
+            println!("Successfully connected to localhost:23685");
+
+            send_message(&mut stream, Message::FindPdb(Uuid::parse_str("936DA01F9ABD4d9d80C702AF85C822A8")?))?;
+            
+            println!("Sent message");
+
+/*
+            let msg = b"Hello!";
+
+            stream.write(msg).unwrap();
+            println!("Sent Hello, awaiting reply...");
+
+            let mut data = [0 as u8; 6]; // using 6 byte buffer
+            match stream.read_exact(&mut data) {
+                Ok(_) => {
+                    if &data == msg {
+                        println!("Reply is ok!");
+                    } else {
+                        let text = from_utf8(&data).unwrap();
+                        println!("Unexpected reply: {}", text);
+                    }
+                },
+                Err(e) => {
+                    println!("Failed to receive data: {}", e);
+                }
+            }
+*/
+        },
+        Err(e) => {
+            println!("Failed to connect: {}", e);
+        }
+    }
+    
+    // Run extract command
     let _cmd = &[
         "pdbstr",                                                 // executable
         "-r",                                                     // read
@@ -219,6 +288,9 @@ fn extract_all(_op: ExtractAllOp) -> anyhow::Result<()> {
 }
 
 fn info(op: InfoOp) -> anyhow::Result<()> {
+    // Temp: span watch
+    std::thread::spawn(|| watch(WatchOp{}));
+
     // Load PDB
     let pdbfile = File::open(op.pdb)?;
     let mut pdb = pdb::PDB::open(pdbfile)?;
@@ -259,7 +331,8 @@ fn info(op: InfoOp) -> anyhow::Result<()> {
 
 fn watch(_: WatchOp) -> anyhow::Result<()> {
     // Find relevant pdbs (pdbs containing srcsrv w/ VERCTRL=fts_pdbsrc
-    let mut relevant_pdbs: Vec<PathBuf> = Default::default();
+    let mut relevant_pdbs: std::collections::HashMap<Uuid, PathBuf> = Default::default();
+
     for entry in WalkDir::new("c:/temp/pdb")
         .into_iter()
         .filter_map(|e| e.ok())
@@ -279,7 +352,8 @@ fn watch(_: WatchOp) -> anyhow::Result<()> {
         }
 
         // Check if this pdb is an fts
-        let is_fts_pdbsrc = || -> anyhow::Result<bool> {
+        // Use lambda for conveient result catching
+        let _ = || -> anyhow::Result<()> {
             // Open PDB
             let pdbfile = File::open(entry.path())?;
             let mut pdb = pdb::PDB::open(pdbfile)?;
@@ -288,20 +362,30 @@ fn watch(_: WatchOp) -> anyhow::Result<()> {
             let srcsrv_stream = pdb.named_stream("srcsrv".as_bytes())?;
             let srcsrv_str: &str = std::str::from_utf8(&srcsrv_stream)?;
 
-            Ok(srcsrv_str.contains("VERCTRL=fts_pdbsrc"))
-        }()
-        .unwrap_or_default();
+            if srcsrv_str.contains("VERCTRL=fts_pdbsrc") {
+                // TODO: Find UUID
+                let uuid = Uuid::parse_str("936DA01F9ABD4d9d80C702AF85C822A8")?;
 
-        if !is_fts_pdbsrc {
-            continue;
-        }
+                relevant_pdbs.insert(uuid, entry.path().to_path_buf());
+            }
 
-        relevant_pdbs.push(entry.path().to_path_buf());
+            Ok(())
+        }();
     }
 
-    let handle_connection = |stream: &mut TcpStream| -> anyhow::Result<()> {
+    let handle_connection = |mut stream: &mut TcpStream| -> anyhow::Result<()> {
         let mut packet_size_buf: [u8; 2] = Default::default();
         let mut packet_buf: Vec<u8> = Vec::with_capacity(64);
+
+        loop {
+            let msg = read_message(&mut stream)?;
+            match msg {
+                Message::FindPdb(uuid) => {
+                },
+                _ => return Err(anyhow!("Unexpected message: [{:?}]", msg))
+            }
+        }
+
         loop {
             // Read packet size
             stream.read_exact(&mut packet_size_buf)?;
@@ -316,7 +400,7 @@ fn watch(_: WatchOp) -> anyhow::Result<()> {
     };
 
     // Listen
-    let listener = TcpListener::bind("127.0.0.1:23685")?; // port chosen randomly
+    let listener = TcpListener::bind("localhost:23685")?; // port chosen randomly
     for stream in listener.incoming() {
         match stream {
             Ok(mut stream) => {
