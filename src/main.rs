@@ -1,4 +1,5 @@
 use anyhow::*;
+use path_slash::PathExt;
 use pdb::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -169,75 +170,46 @@ fn embed(op: EmbedOp) -> anyhow::Result<(), anyhow::Error> {
                         None => {}
                     }
                 }
-
-                /*
-                if .any(|root| canonical_filepath.starts_with(root)) {
-
-                    let subpath : PathBuf = canonical_filepath.iter().skip(root.len()).collect();
-                    filepaths.push((filepath, PathBuf::new());
-                }
-                */
             }
         }
     }
 
-    // Iterate streams
-    let info = pdb.pdb_information()?;
-    let stream_names = info.stream_names()?;
-    stream_names
-        .iter()
-        .for_each(|stream_name| println!("Stream: [{}]", stream_name.name));
-
-    // Close PDB
+    // Close PDB so we can write to it
     drop(pdb);
-    /*
+
     // Now iterate files
-    for filepath in filepaths {
-        match std::fs::File::open(&filepath) {
-            Ok(_) => {
-                println!("File found, adding to pdb: [{:?}]", filepath);
-                let pathstr = filepath.as_str();
+    for (filepath, relpath) in filepaths {
+        let cmd = &[
+            "pdbstr",
+            "-w",
+            &format!("-p:{}", &op.pdb),
+            &format!("-s:/fts_pdbsrc/{}", relpath.to_slash_lossy()),
+            &format!("-i:{}", filepath.to_slash_lossy()),
 
-                if pathstr.contains("Program Files") {
-                    continue;
-                }
+            //&format!("-p:c:/temp/pdb/CrashTest.pdb"),
+            //&format!("-s:fts_pdbsrc"),
+            //&format!("-i:c:/temp/cpp/CrashTest/CrashTest.cpp"),
+        ];
 
-                let cmd = &[
-                    "pdbstr",
-                    "-w",
-                    &format!("-p:{}", &op.pdb),
-                    &format!("-s:/fts_pdbsrc/{}", pathstr),
-                    &format!("-i:{}", pathstr),
-                    //"-p:c:/temp/pdb/CrashTest.pdb",
-                    //"-s:ftstest2",
-                    //"-i:c:/temp/cpp/CrashTest/CrashTest.cpp"
-                ];
+        let mut p = Popen::create(
+            cmd,
+            PopenConfig {
+                stdout: Redirection::Pipe,
+                ..Default::default()
+            },
+        )?;
 
-                let mut p = Popen::create(
-                    cmd,
-                    PopenConfig {
-                        stdout: Redirection::Pipe,
-                        ..Default::default()
-                    },
-                )?;
-
-                let status = p.wait()?;
-                match status {
-                    ExitStatus::Exited(0) => (),
-                    _ => bail!(
-                        "File [{:?}] encountered status [{:?}] on cmd [{:?}]",
-                        filepath,
-                        status,
-                        cmd
-                    ),
-                }
-
-                println!("Successfull executed: [{:?}]", cmd);
-            }
-            Err(_) => println!("File not found, skipping: [{:?}]", filepath),
+        let status = p.wait()?;
+        match status {
+            ExitStatus::Exited(0) => (),
+            _ => bail!(
+                "File [{:?}] encountered status [{:?}] on cmd [{:?}]",
+                filepath,
+                status,
+                cmd
+            ),
         }
     }
-    */
 
     Ok(())
 }

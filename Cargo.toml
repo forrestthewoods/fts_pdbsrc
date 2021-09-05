@@ -5,6 +5,7 @@ edition = "2018"
 
 [dependencies]
 anyhow = "1.0"
+path-slash = "0.1.4"
 pdb = "0.7.0"
 rmp-serde = "0.15.5"
 serde = { version="1.0.130", features=["derive"]}

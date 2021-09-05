@@ -78,6 +78,7 @@ name = "fts_pdbsrc"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "path-slash",
  "pdb",
  "rmp-serde",
  "serde",
@@ -136,6 +137,12 @@ checksum = "9a64b1ec5cda2586e284722486d802acf1f7dbdc623e2bfc57e65ca1cd099290"
 dependencies = [
  "autocfg",
 ]
+
+[[package]]
+name = "path-slash"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3cacbb3c4ff353b534a67fb8d7524d00229da4cb1dc8c79f4db96e375ab5b619"
 
 [[package]]
 name = "pdb"
