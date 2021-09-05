@@ -195,21 +195,6 @@ fn embed(op: EmbedOp) -> anyhow::Result<(), anyhow::Error> {
                 }
 
                 println!("Successfull executed: [{:?}]", cmd);
-
-                /*
-                let result : Result<()> = match status {
-                    ExitStatus::Exited(code) => {
-                        if code != 0 {
-                            Err(anyhow!("File [{}] encountered status [{}] with"))
-                        } else {
-                            Ok(())
-                        }
-                    },
-                    _ => {
-                        Error::new(ErrorKind::Other, format!("Unexpected error: [{:?}", status))
-                    }
-                };
-                */
             }
             Err(_) => println!("File not found, skipping: [{:?}]", filepath),
         }
@@ -237,12 +222,20 @@ fn extract_one(op: ExtractOneOp) -> anyhow::Result<()> {
             // Go ahead and close stream
             drop(stream);
 
-            match response {
+            // Read response
+            let (uuid, pdb_path) = match response {
                 Message::FoundPdb((uuid, Some(path))) => {
-                    println!("Success! [{}] [{:?}]", uuid, path);
+                    (uuid, path)
                 },
                 _ => return Err(anyhow!("extract_one queried service for PDB with uuid [{}], but failed with response: [{:?}]", uuid, response))
-            }
+            };
+
+            println!("Success! [{}] [{:?}]", uuid, pdb_path);
+
+            // Load PDB
+            let pdbfile = File::open(op.pdb)?;
+            let mut pdb = pdb::PDB::open(pdbfile)?;
+
 
 /*
             let msg = b"Hello!";
@@ -272,6 +265,7 @@ fn extract_one(op: ExtractOneOp) -> anyhow::Result<()> {
     }
     
     // Run extract command
+    /*
     let _cmd = &[
         "pdbstr",                                                 // executable
         "-r",                                                     // read
@@ -279,6 +273,7 @@ fn extract_one(op: ExtractOneOp) -> anyhow::Result<()> {
         &format!("-s:/fts_pdbsrc/{}", op.file),                   // filepath (as stream)
         &format!("-i:%LOCALAPPDATA%/fts/fts_pdbsrc/{}", op.file), // out file
     ];
+    */
 
     Ok(())
 }
