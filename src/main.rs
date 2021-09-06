@@ -62,7 +62,7 @@ struct ExtractOneOp {
     file: String,
 
     #[structopt(short, long, help = "Output path, including filename, to create")]
-    out: String,
+    out: PathBuf,
 }
 
 #[derive(Debug, StructOpt)]
@@ -193,20 +193,23 @@ fn embed(op: EmbedOp) -> anyhow::Result<(), anyhow::Error> {
     }
 
     // Create tempfile representing srcsrv.ini
-    let mut srcsrv = tempfile::NamedTempFile::new()?;
     let uuid = uuid::Uuid::new_v4();
+    let pdb_name = Path::new(&op.pdb).file_name().unwrap().to_str().unwrap();
+
+    let mut srcsrv = tempfile::NamedTempFile::new()?;
     writeln!(
         srcsrv,
         "SRCSRV: ini ------------------------------------------------"
     )?;
     writeln!(srcsrv, "VERSION=1")?;
     writeln!(srcsrv, "VERCTRL=fts_pdbsrc")?;
-    writeln!(srcsrv, "FTS_UUID={}", uuid)?;
+    writeln!(srcsrv, "FTS_PDB_NAME={}", pdb_name)?;
+    writeln!(srcsrv, "FTS_PDBSTR_UUID={}", uuid)?;
     writeln!(
         srcsrv,
         "SRCSRV: variables ------------------------------------------"
     )?;
-    writeln!(srcsrv, "SRCSRVTRG=%LOCALAPPDATA%/fts_pdbsrc/{}/%var2%", uuid)?;
+    writeln!(srcsrv, "SRCSRVTRG=%LOCALAPPDATA%/fts/fts_pdbsrc/{}/%var2%", uuid)?;
     writeln!(
         srcsrv,
         "SRCSRVCMD=fts_pdbsrc extract_one --pdb-uuid {} --file %var2% --out %SRCSRVTRG%",
@@ -290,12 +293,17 @@ fn extract_one(op: ExtractOneOp) -> anyhow::Result<()> {
             let mut pdb = pdb::PDB::open(pdb_file)?;
 
             // Get file stream
-            let file_stream = pdb.named_stream(format!("/fts_pdbsr/{}", op.file).as_bytes())?;
+            let stream_name = format!("/fts_pdbsrc/{}", op.file);
+            let file_stream = pdb
+                .named_stream(stream_name.as_bytes())
+                .expect(&format!("Failed to find stream named [{}]", stream_name));
             let file_stream_str: &str = std::str::from_utf8(&file_stream)?;
 
             // Write to output file
-            println!("Opening file: [{:?}]", op.out);
-            let mut file = std::fs::File::open(op.out)?;
+            println!("Creating file: [{:?}]", op.out);
+            let out_dir = op.out.parent().ok_or(anyhow!("Oh no"))?;
+            fs::create_dir_all(out_dir)?;
+            let mut file = std::fs::File::create(op.out)?;
             file.write_all(file_stream_str.as_bytes())?;
         }
         Err(e) => {
@@ -379,11 +387,20 @@ fn watch(_: WatchOp) -> anyhow::Result<()> {
             let srcsrv_stream = pdb.named_stream("srcsrv".as_bytes())?;
             let srcsrv_str: &str = std::str::from_utf8(&srcsrv_stream)?;
 
-            if srcsrv_str.contains("VERCTRL=fts_pdbsrc") {
-                // TODO: Find UUID
-                let uuid = Uuid::parse_str("936DA01F9ABD4d9d80C702AF85C822A8")?;
+            // Verify srcsrv is compatible
+            if srcsrv_str.contains("VERCTRL=fts_pdbsrc") && srcsrv_str.contains("VERSION=1") {
+                // Extract Uuid
+                let key = "FTS_PDBSTR_UUID=";
+                let uuid: Uuid = srcsrv_str
+                    .lines()
+                    .find(|line| line.starts_with(key))
+                    .and_then(|line| Uuid::parse_str(&line[key.len()..]).ok())
+                    .ok_or(anyhow!("Failed to parse Uuid.\n{}", srcsrv_str))?;
 
+                // Store result
                 relevant_pdbs.insert(uuid, entry.path().to_path_buf());
+            } else {
+                bail!("Incompatible srcsrv.\n{}", srcsrv_str);
             }
 
             Ok(())

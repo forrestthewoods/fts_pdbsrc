@@ -24,12 +24,12 @@
             "program": "${workspaceRoot}/target/debug/fts_pdbsrc.exe",
             "args": [
                 "extract_one",
+                "--pdb-uuid",
+                "dac8cbc3-fff7-48bc-afcb-2ac6197522a9",
                 "--file",
-                "foo",
-                "--outdir",
-                "bar",
-                "--pdb",
-                "baz"
+                "CrashTest/CrashTest.cpp",
+                "--out",
+                "C:/Users/Forrest/AppData/Local/fts_pdbsrc/dac8cbc3-fff7-48bc-afcb-2ac6197522a9/CrashTest/CrashTest.cpp",
             ],
             "stopAtEntry": false,
             "cwd": "${workspaceRoot}",
