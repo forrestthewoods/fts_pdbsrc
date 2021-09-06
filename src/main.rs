@@ -194,7 +194,6 @@ fn embed(op: EmbedOp) -> anyhow::Result<(), anyhow::Error> {
 
     // Create tempfile representing srcsrv.ini
     let uuid = uuid::Uuid::new_v4();
-    let pdb_name = Path::new(&op.pdb).file_name().unwrap().to_str().unwrap();
 
     let mut srcsrv = tempfile::NamedTempFile::new()?;
     writeln!(
@@ -203,13 +202,13 @@ fn embed(op: EmbedOp) -> anyhow::Result<(), anyhow::Error> {
     )?;
     writeln!(srcsrv, "VERSION=1")?;
     writeln!(srcsrv, "VERCTRL=fts_pdbsrc")?;
-    writeln!(srcsrv, "FTS_PDB_NAME={}", pdb_name)?;
+    writeln!(srcsrv, "FTS_PDB_NAME={}", Path::new(&op.pdb).file_name().unwrap().to_str().unwrap())?;
     writeln!(srcsrv, "FTS_PDBSTR_UUID={}", uuid)?;
     writeln!(
         srcsrv,
         "SRCSRV: variables ------------------------------------------"
     )?;
-    writeln!(srcsrv, "SRCSRVTRG=%LOCALAPPDATA%/fts/fts_pdbsrc/{}/%var2%", uuid)?;
+    writeln!(srcsrv, "SRCSRVTRG=%LOCALAPPDATA%\\fts\\fts_pdbsrc\\{}\\{}\\%var2%", Path::new(&op.pdb).file_stem().unwrap().to_str().unwrap(), uuid)?;
     writeln!(
         srcsrv,
         "SRCSRVCMD=fts_pdbsrc extract_one --pdb-uuid {} --file %var2% --out %SRCSRVTRG%",
