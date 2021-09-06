@@ -493,3 +493,4 @@ fn run_command(cmd: &[&str]) -> anyhow::Result<()> {
         _ => bail!("Encountered status [{:?}] on cmd [{:?}]", status, cmd),
     }
 }
+
