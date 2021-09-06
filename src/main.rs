@@ -115,7 +115,11 @@ fn run(opts: Opts) -> anyhow::Result<()> {
 }
 
 fn embed(op: EmbedOp) -> anyhow::Result<(), anyhow::Error> {
-    let canonical_roots: Vec<PathBuf> = op.roots.iter().filter_map(|root| fs::canonicalize(root).ok()).collect();
+    let canonical_roots: Vec<PathBuf> = op
+        .roots
+        .iter()
+        .filter_map(|root| fs::canonicalize(root).ok())
+        .collect();
 
     // Load PDB
     let pdbfile = File::open(&op.pdb)?;
@@ -123,7 +127,7 @@ fn embed(op: EmbedOp) -> anyhow::Result<(), anyhow::Error> {
     let string_table = pdb.string_table()?;
 
     // Iterate files
-    let mut filepaths: Vec<(PathBuf, PathBuf)> = Default::default();
+    let mut filepaths: Vec<(RawString, PathBuf, String)> = Default::default();
 
     let di = pdb.debug_information()?;
     let mut modules = di.modules()?;
@@ -142,13 +146,25 @@ fn embed(op: EmbedOp) -> anyhow::Result<(), anyhow::Error> {
                     match canonical_roots
                         .iter()
                         .filter_map(|root| {
-                            canonical_filepath
-                                .starts_with(root)
-                                .then(|| canonical_filepath.iter().skip(root.iter().count()).collect())
+                            canonical_filepath.starts_with(root).then(|| {
+                                canonical_filepath
+                                    .iter()
+                                    .skip(root.iter().count())
+                                    .collect::<PathBuf>()
+                            })
                         })
                         .next()
                     {
-                        Some(subpath) => filepaths.push((filepath.to_owned(), subpath)),
+                        Some(subpath) => filepaths.push((
+                            raw_filepath,
+                            subpath.clone(),
+                            subpath
+                                .file_name()
+                                .unwrap()
+                                .to_string_lossy()
+                                .to_owned()
+                                .to_string(),
+                        )),
                         None => {}
                     }
                 }
@@ -160,13 +176,13 @@ fn embed(op: EmbedOp) -> anyhow::Result<(), anyhow::Error> {
     drop(pdb);
 
     // Write source files into PDB
-    for (filepath, relpath) in &filepaths {
+    for (raw_filepath, relpath, _) in &filepaths {
         let cmd = &[
             "pdbstr",                                                // exe to run
             "-w",                                                    // write
             &format!("-p:{}", &op.pdb),                              // path to pdb
             &format!("-s:/fts_pdbsrc/{}", relpath.to_slash_lossy()), // stream to write
-            &format!("-i:{}", filepath.to_slash_lossy()),            // file to write into stream
+            &format!("-i:{}", raw_filepath),                         // file to write into stream
         ];
 
         run_command(cmd)?;
@@ -175,11 +191,17 @@ fn embed(op: EmbedOp) -> anyhow::Result<(), anyhow::Error> {
     // Create tempfile representing srcsrv.ini
     let mut srcsrv = tempfile::NamedTempFile::new()?;
     let uuid = uuid::Uuid::new_v4();
-    writeln!(srcsrv, "SRCSRV: ini ------------------------------------------------")?;
+    writeln!(
+        srcsrv,
+        "SRCSRV: ini ------------------------------------------------"
+    )?;
     writeln!(srcsrv, "VERSION=1")?;
     writeln!(srcsrv, "VERCTRL=fts_pdbsrc")?;
     writeln!(srcsrv, "FTS_UUID={}", uuid)?;
-    writeln!(srcsrv, "SRCSRV: variables ------------------------------------------")?;
+    writeln!(
+        srcsrv,
+        "SRCSRV: variables ------------------------------------------"
+    )?;
     writeln!(srcsrv, "SRCSRVTRG=%LOCALAPPDATA%/fts_pdbsrc/{}/%var2%", uuid)?;
     writeln!(
         srcsrv,
@@ -190,16 +212,19 @@ fn embed(op: EmbedOp) -> anyhow::Result<(), anyhow::Error> {
         "SRCSRV: source files ------------------------------------------"
     )?;
 
-    for (filepath, relpath) in &filepaths {
+    for (raw_filepath, relpath, filename) in &filepaths {
         writeln!(
             srcsrv,
             "{}*{}*{}",
-            filepath.to_slash_lossy(),
+            raw_filepath,
             relpath.to_slash_lossy(),
-            filepath.file_name().unwrap().to_string_lossy()
+            filename
         )?;
     }
-    writeln!(srcsrv, "SRCSRV: end ------------------------------------------------")?;
+    writeln!(
+        srcsrv,
+        "SRCSRV: end ------------------------------------------------"
+    )?;
 
     // Close and keep tempfile
     let (_, tempfile_path) = srcsrv.keep()?;
@@ -242,10 +267,10 @@ fn extract_one(op: ExtractOneOp) -> anyhow::Result<()> {
                 Message::FoundPdb((uuid, Some(path))) => (uuid, path),
                 _ => {
                     return Err(anyhow!(
-                        "extract_one queried service for PDB with uuid [{}], but failed with response: [{:?}]",
-                        uuid,
-                        response
-                    ))
+                    "extract_one queried service for PDB with uuid [{}], but failed with response: [{:?}]",
+                    uuid,
+                    response
+                ))
                 }
             };
 
@@ -347,7 +372,9 @@ fn watch(_: WatchOp) -> anyhow::Result<()> {
         }();
     }
 
-    let handle_connection = |mut stream: &mut TcpStream, pdb_db: &HashMap<Uuid, PathBuf>| -> anyhow::Result<()> {
+    let handle_connection = |mut stream: &mut TcpStream,
+                             pdb_db: &HashMap<Uuid, PathBuf>|
+     -> anyhow::Result<()> {
         loop {
             let msg = read_message(&mut stream)?;
             match msg {
