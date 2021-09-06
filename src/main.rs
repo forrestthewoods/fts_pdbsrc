@@ -206,16 +206,15 @@ fn embed(op: EmbedOp) -> anyhow::Result<(), anyhow::Error> {
         "FTS_PDB_NAME={}",
         Path::new(&op.pdb).file_name().unwrap().to_str().unwrap()
     )?;
-    writeln!(srcsrv, "FTS_PDBSTR_UUID={}", uuid)?;
     writeln!(
         srcsrv,
         "SRCSRV: variables ------------------------------------------"
     )?;
+    writeln!(srcsrv, "FTS_PDBSTR_UUID={}", uuid)?;
     writeln!(
         srcsrv,
-        "SRCSRVTRG=%LOCALAPPDATA%\\fts\\fts_pdbsrc\\{}\\{}\\%var2%",
-        Path::new(&op.pdb).file_stem().unwrap().to_str().unwrap(),
-        uuid
+        "SRCSRVTRG=%LOCALAPPDATA%\\fts\\fts_pdbsrc\\{}\\%FTS_PDBSTR_UUID%\\%var2%",
+        Path::new(&op.pdb).file_stem().unwrap().to_str().unwrap()
     )?;
     writeln!(
         srcsrv,
@@ -307,7 +306,10 @@ fn extract_one(op: ExtractOneOp) -> anyhow::Result<()> {
             let file_stream_str: &str = std::str::from_utf8(&file_stream)?;
 
             // Write to output file
-            let out_dir = op.out.parent().ok_or(anyhow!("Oh no"))?;
+            let out_dir = op
+                .out
+                .parent()
+                .ok_or(anyhow!("Failed to get directory for path [{:?}]", op.out))?;
             fs::create_dir_all(out_dir)?;
             let mut file = std::fs::File::create(op.out)?;
             file.write_all(file_stream_str.as_bytes())?;
@@ -493,4 +495,3 @@ fn run_command(cmd: &[&str]) -> anyhow::Result<()> {
         _ => bail!("Encountered status [{:?}] on cmd [{:?}]", status, cmd),
     }
 }
-
