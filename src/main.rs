@@ -201,6 +201,7 @@ fn embed(op: EmbedOp) -> anyhow::Result<(), anyhow::Error> {
     )?;
     writeln!(srcsrv, "VERSION=1")?;
     writeln!(srcsrv, "VERCTRL=fts_pdbsrc")?;
+    // TODO: add datetime
     writeln!(
         srcsrv,
         "FTS_PDB_NAME={}",
