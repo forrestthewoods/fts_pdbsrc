@@ -1,7 +1,10 @@
 use anyhow::*;
+use interprocess::os::windows::named_pipe::DuplexMsgPipeStream;
+use interprocess::ReliableReadMsg;
 use pdb::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::ffi::OsStr;
 use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -264,58 +267,59 @@ fn extract_one(op: ExtractOneOp) -> anyhow::Result<()> {
     // Temp: span watch
     std::thread::spawn(|| watch(WatchOp {}));
 
-    // Query server
-    match TcpStream::connect("localhost:23685") {
-        Ok(mut stream) => {
-            // Ask service for PDB path
-            send_message(&mut stream, Message::FindPdb(op.pdb_uuid))?;
+    std::thread::sleep(std::time::Duration::from_millis(500));
 
-            // Wait for response
-            let response = read_message(&mut stream)?;
+    // Connect to service
+    println!("Client: Connecting to service");
+    let mut stream = DuplexMsgPipeStream::connect("fts_pdbsrc")?;
+    
+    // Query service for Pdb path
+    println!("Client: Querying service");
+    send_message2(&mut stream, Message::FindPdb(op.pdb_uuid))?;
+    println!("Client: Waiting for response");
+    
+    // Wait for response
+    let response = read_message2(&mut stream)?;
+    println!("Client: Response received: [{:?}]", response);
+    
+    // Go ahead and clsoe stream
+    drop(stream);
 
-            // Go ahead and close stream
-            drop(stream);
-
-            // Read response
-            let (_, pdb_path) = match response {
-                Message::FoundPdb((uuid, Some(path))) => {
-                    assert_eq!(
-                        uuid, op.pdb_uuid,
-                        "Mismatched Uuids. Requested: [{}] Found: [{}]",
-                        op.pdb_uuid, uuid
-                    );
-                    (uuid, path)
-                }
-                _ => {
-                    return Err(anyhow!(
-                    "extract_one queried service for PDB with uuid [{}], but failed with response: [{:?}]",
-                    op.pdb_uuid,
-                    response
-                ))
-                }
-            };
-
-            // Load PDB
-            let pdb_file = File::open(pdb_path)?;
-            let mut pdb = pdb::PDB::open(pdb_file)?;
-
-            // Get file stream
-            let stream_name = format!("/fts_pdbsrc/{}", op.file);
-            let file_stream = pdb
-                .named_stream(stream_name.as_bytes())
-                .expect(&format!("Failed to find stream named [{}]", stream_name));
-            let file_stream_str: &str = std::str::from_utf8(&file_stream)?;
-
-            // Write to output file
-            let out_dir = op.out.parent().ok_or(anyhow!("Oh no"))?;
-            fs::create_dir_all(out_dir)?;
-            let mut file = std::fs::File::create(op.out)?;
-            file.write_all(file_stream_str.as_bytes())?;
+    // Read response
+    let (_, pdb_path) = match response {
+        Message::FoundPdb((uuid, Some(path))) => {
+            assert_eq!(
+                uuid, op.pdb_uuid,
+                "Mismatched Uuids. Requested: [{}] Found: [{}]",
+                op.pdb_uuid, uuid
+            );
+            (uuid, path)
         }
-        Err(e) => {
-            println!("Failed to connect: {}", e);
+        _ => {
+            return Err(anyhow!(
+            "extract_one queried service for PDB with uuid [{}], but failed with response: [{:?}]",
+            op.pdb_uuid,
+            response
+        ))
         }
-    }
+    };
+
+    // Load PDB
+    let pdb_file = File::open(pdb_path)?;
+    let mut pdb = pdb::PDB::open(pdb_file)?;
+
+    // Get file stream
+    let stream_name = format!("/fts_pdbsrc/{}", op.file);
+    let file_stream = pdb
+        .named_stream(stream_name.as_bytes())
+        .expect(&format!("Failed to find stream named [{}]", stream_name));
+    let file_stream_str: &str = std::str::from_utf8(&file_stream)?;
+
+    // Write to output file
+    let out_dir = op.out.parent().ok_or(anyhow!("Oh no"))?;
+    fs::create_dir_all(out_dir)?;
+    let mut file = std::fs::File::create(op.out)?;
+    file.write_all(file_stream_str.as_bytes())?;
 
     Ok(())
 }
@@ -413,6 +417,50 @@ fn watch(_: WatchOp) -> anyhow::Result<()> {
         }();
     }
 
+    println!("Creating listener");
+
+    let listener = interprocess::os::windows::named_pipe::PipeListenerOptions::new()
+        .name(OsStr::new("fts_pdbsrc"))
+        .mode(interprocess::os::windows::named_pipe::PipeMode::Messages)
+        .nonblocking(false)
+        .create::<DuplexMsgPipeStream>()?;
+
+    for stream in listener.incoming() {
+        println!("Receiving incoming stream");  
+
+        match stream {
+            Ok(mut stream) => {
+                let pdb_db = relevant_pdbs.clone();
+                std::thread::spawn(move || {
+                    let mut handle_one = || -> anyhow::Result<()> {
+                        println!("Server: Reading a message");  
+
+                        let message = read_message2(&mut stream)?;
+                        println!("Server: Read message [{:?}]", message);  
+
+                        match message {
+                            Message::FindPdb(uuid) => match pdb_db.get(&uuid) {
+                                Some(path) => {
+                                    println!("Server: Sending a message [{:?}]", message);  
+
+                                    send_message2(&mut stream, Message::FoundPdb((uuid, Some(path.clone()))))
+                                }
+                                None => send_message2(&mut stream, Message::FoundPdb((uuid, None))),
+                            },
+                            _ => Err(anyhow!("Unexpected message: [{:?}]", message)),
+                        }
+                    };
+
+                    loop {
+                        let _ = handle_one();
+                    }
+                });
+            }
+            Err(e) => println!("Error accepting listener: [{}]", e),
+        }
+    }
+
+    /*
     let handle_connection = |mut stream: &mut TcpStream,
                              pdb_db: &HashMap<Uuid, PathBuf>|
      -> anyhow::Result<()> {
@@ -442,6 +490,7 @@ fn watch(_: WatchOp) -> anyhow::Result<()> {
             Err(e) => println!("Error accepting listener: [{}]", e),
         }
     }
+    */
 
     println!("No more listeners?");
 
@@ -476,6 +525,32 @@ fn read_message(stream: &mut TcpStream) -> anyhow::Result<Message> {
     let message: Message = rmp_serde::from_read_ref(&packet_buf)?;
 
     Ok(message)
+}
+
+fn read_message2(stream: &mut DuplexMsgPipeStream) -> anyhow::Result<Message> {
+    // Read message bytes
+    let mut read_buf = vec![0; 256];
+    let read_result = stream.read_msg(&mut read_buf)?;
+
+    let msg_size = match read_result {
+        Ok(len) => len,
+        Err(new_buf) => {
+            read_buf = new_buf;
+            read_buf.len()
+        }
+    };
+    let msg_slice = &read_buf[..msg_size];
+
+    // Deserialize message
+    let message: Message = rmp_serde::from_read_ref(msg_slice)?;
+    Ok(message)
+}
+
+fn send_message2(stream: &mut DuplexMsgPipeStream, message: Message) -> anyhow::Result<()> {
+    // Serialize message
+    let message_buf = rmp_serde::to_vec(&message).unwrap();
+    stream.write_all(&message_buf)?;
+    Ok(())
 }
 
 fn run_command(cmd: &[&str]) -> anyhow::Result<()> {
