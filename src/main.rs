@@ -1,5 +1,4 @@
 use anyhow::*;
-use path_slash::PathExt;
 use pdb::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -185,7 +184,7 @@ fn embed(op: EmbedOp) -> anyhow::Result<(), anyhow::Error> {
             "pdbstr",                                                // exe to run
             "-w",                                                    // write
             &format!("-p:{}", &op.pdb),                              // path to pdb
-            &format!("-s:/fts_pdbsrc/{}", relpath.to_slash_lossy()), // stream to write
+            &format!("-s:/fts_pdbsrc/{}", relpath.to_string_lossy()), // stream to write
             &format!("-i:{}", raw_filepath),                         // file to write into stream
         ];
 
@@ -224,7 +223,7 @@ fn embed(op: EmbedOp) -> anyhow::Result<(), anyhow::Error> {
             srcsrv,
             "{}*{}*{}",
             raw_filepath,
-            relpath.to_slash_lossy(),
+            relpath.to_string_lossy(),
             filename
         )?;
     }
@@ -242,7 +241,7 @@ fn embed(op: EmbedOp) -> anyhow::Result<(), anyhow::Error> {
         "-w",                                              // write
         &format!("-p:{}", &op.pdb),                        // path to pdb
         &format!("-s:srcsrv"),                             // stream to write
-        &format!("-i:{}", tempfile_path.to_slash_lossy()), // file to write into stream
+        &format!("-i:{}", tempfile_path.to_string_lossy()), // file to write into stream
     ];
     run_command(cmd)?;
 
