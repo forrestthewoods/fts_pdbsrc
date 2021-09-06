@@ -181,11 +181,11 @@ fn embed(op: EmbedOp) -> anyhow::Result<(), anyhow::Error> {
     // Write source files into PDB
     for (raw_filepath, relpath, _) in &filepaths {
         let cmd = &[
-            "pdbstr",                                                // exe to run
-            "-w",                                                    // write
-            &format!("-p:{}", &op.pdb),                              // path to pdb
+            "pdbstr",                                                 // exe to run
+            "-w",                                                     // write
+            &format!("-p:{}", &op.pdb),                               // path to pdb
             &format!("-s:/fts_pdbsrc/{}", relpath.to_string_lossy()), // stream to write
-            &format!("-i:{}", raw_filepath),                         // file to write into stream
+            &format!("-i:{}", raw_filepath),                          // file to write into stream
         ];
 
         run_command(cmd)?;
@@ -201,13 +201,22 @@ fn embed(op: EmbedOp) -> anyhow::Result<(), anyhow::Error> {
     )?;
     writeln!(srcsrv, "VERSION=1")?;
     writeln!(srcsrv, "VERCTRL=fts_pdbsrc")?;
-    writeln!(srcsrv, "FTS_PDB_NAME={}", Path::new(&op.pdb).file_name().unwrap().to_str().unwrap())?;
+    writeln!(
+        srcsrv,
+        "FTS_PDB_NAME={}",
+        Path::new(&op.pdb).file_name().unwrap().to_str().unwrap()
+    )?;
     writeln!(srcsrv, "FTS_PDBSTR_UUID={}", uuid)?;
     writeln!(
         srcsrv,
         "SRCSRV: variables ------------------------------------------"
     )?;
-    writeln!(srcsrv, "SRCSRVTRG=%LOCALAPPDATA%\\fts\\fts_pdbsrc\\{}\\{}\\%var2%", Path::new(&op.pdb).file_stem().unwrap().to_str().unwrap(), uuid)?;
+    writeln!(
+        srcsrv,
+        "SRCSRVTRG=%LOCALAPPDATA%\\fts\\fts_pdbsrc\\{}\\{}\\%var2%",
+        Path::new(&op.pdb).file_stem().unwrap().to_str().unwrap(),
+        uuid
+    )?;
     writeln!(
         srcsrv,
         "SRCSRVCMD=fts_pdbsrc extract_one --pdb-uuid {} --file %var2% --out %SRCSRVTRG%",
@@ -237,10 +246,10 @@ fn embed(op: EmbedOp) -> anyhow::Result<(), anyhow::Error> {
 
     // Write srcsrv
     let cmd = &[
-        "pdbstr",                                          // exe to run
-        "-w",                                              // write
-        &format!("-p:{}", &op.pdb),                        // path to pdb
-        &format!("-s:srcsrv"),                             // stream to write
+        "pdbstr",                                           // exe to run
+        "-w",                                               // write
+        &format!("-p:{}", &op.pdb),                         // path to pdb
+        &format!("-s:srcsrv"),                              // stream to write
         &format!("-i:{}", tempfile_path.to_string_lossy()), // file to write into stream
     ];
     run_command(cmd)?;
