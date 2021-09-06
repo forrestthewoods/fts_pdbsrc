@@ -52,14 +52,11 @@ struct EmbedOp {
 
 #[derive(Debug, StructOpt)]
 struct ExtractOneOp {
-    #[structopt(short, long, help = "Target PDB for specified operation")]
-    pdb: String,
-
-    #[structopt(short, long, help = "Single file to extract")]
+    #[structopt(short, long, help = "File to extract")]
     file: String,
 
-    #[structopt(short, long, help = "Out directory to extract files")]
-    outdir: String,
+    #[structopt(short, long, help = "Output path, including filename, to create")]
+    out: String,
 }
 
 #[derive(Debug, StructOpt)]
@@ -118,11 +115,7 @@ fn run(opts: Opts) -> anyhow::Result<()> {
 }
 
 fn embed(op: EmbedOp) -> anyhow::Result<(), anyhow::Error> {
-    let canonical_roots: Vec<PathBuf> = op
-        .roots
-        .iter()
-        .filter_map(|root| fs::canonicalize(root).ok())
-        .collect();
+    let canonical_roots: Vec<PathBuf> = op.roots.iter().filter_map(|root| fs::canonicalize(root).ok()).collect();
 
     // Load PDB
     let pdbfile = File::open(&op.pdb)?;
@@ -145,28 +138,17 @@ fn embed(op: EmbedOp) -> anyhow::Result<(), anyhow::Error> {
                 let filename_utf8 = std::str::from_utf8(raw_filepath.as_bytes())?;
                 let filepath = Path::new(filename_utf8);
 
-                if filename_utf8.contains("CrashTest") {
-                    let mut x = 5;
-                    x += 3;
-                }
-
                 if let Ok(canonical_filepath) = fs::canonicalize(&filepath) {
                     match canonical_roots
                         .iter()
                         .filter_map(|root| {
-                            canonical_filepath.starts_with(root).then(|| {
-                                canonical_filepath
-                                    .iter()
-                                    .skip(root.iter().count())
-                                    .collect()
-                            })
+                            canonical_filepath
+                                .starts_with(root)
+                                .then(|| canonical_filepath.iter().skip(root.iter().count()).collect())
                         })
                         .next()
                     {
-                        Some(subpath) => {
-                            println!("Found! Path: [{:?}]. Relpath: [{:?}]", &filepath, &subpath);
-                            filepaths.push((filepath.to_owned(), subpath))
-                        }
+                        Some(subpath) => filepaths.push((filepath.to_owned(), subpath)),
                         None => {}
                     }
                 }
@@ -177,39 +159,63 @@ fn embed(op: EmbedOp) -> anyhow::Result<(), anyhow::Error> {
     // Close PDB so we can write to it
     drop(pdb);
 
-    // Now iterate files
-    for (filepath, relpath) in filepaths {
+    // Write source files into PDB
+    for (filepath, relpath) in &filepaths {
         let cmd = &[
-            "pdbstr",
-            "-w",
-            &format!("-p:{}", &op.pdb),
-            &format!("-s:/fts_pdbsrc/{}", relpath.to_slash_lossy()),
-            &format!("-i:{}", filepath.to_slash_lossy()),
-
-            //&format!("-p:c:/temp/pdb/CrashTest.pdb"),
-            //&format!("-s:fts_pdbsrc"),
-            //&format!("-i:c:/temp/cpp/CrashTest/CrashTest.cpp"),
+            "pdbstr",                                                // exe to run
+            "-w",                                                    // write
+            &format!("-p:{}", &op.pdb),                              // path to pdb
+            &format!("-s:/fts_pdbsrc/{}", relpath.to_slash_lossy()), // stream to write
+            &format!("-i:{}", filepath.to_slash_lossy()),            // file to write into stream
         ];
 
-        let mut p = Popen::create(
-            cmd,
-            PopenConfig {
-                stdout: Redirection::Pipe,
-                ..Default::default()
-            },
-        )?;
-
-        let status = p.wait()?;
-        match status {
-            ExitStatus::Exited(0) => (),
-            _ => bail!(
-                "File [{:?}] encountered status [{:?}] on cmd [{:?}]",
-                filepath,
-                status,
-                cmd
-            ),
-        }
+        run_command(cmd)?;
     }
+
+    // Create tempfile representing srcsrv.ini
+    let mut srcsrv = tempfile::NamedTempFile::new()?;
+    let uuid = uuid::Uuid::new_v4();
+    writeln!(srcsrv, "SRCSRV: ini ------------------------------------------------")?;
+    writeln!(srcsrv, "VERSION=1")?;
+    writeln!(srcsrv, "VERCTRL=fts_pdbsrc")?;
+    writeln!(srcsrv, "FTS_UUID={}", uuid)?;
+    writeln!(srcsrv, "SRCSRV: variables ------------------------------------------")?;
+    writeln!(srcsrv, "SRCSRVTRG=%LOCALAPPDATA%/fts_pdbsrc/{}/%var2%", uuid)?;
+    writeln!(
+        srcsrv,
+        "SRCSRVCMD=fts_pdbsrc extract_one --file %var2% --out %SRCSRVTRG%"
+    )?;
+    writeln!(
+        srcsrv,
+        "SRCSRV: source files ------------------------------------------"
+    )?;
+
+    for (filepath, relpath) in &filepaths {
+        writeln!(
+            srcsrv,
+            "{}*{}*{}",
+            filepath.to_slash_lossy(),
+            relpath.to_slash_lossy(),
+            filepath.file_name().unwrap().to_string_lossy()
+        )?;
+    }
+    writeln!(srcsrv, "SRCSRV: end ------------------------------------------------")?;
+
+    // Close and keep tempfile
+    let (_, tempfile_path) = srcsrv.keep()?;
+
+    // Write srcsrv
+    let cmd = &[
+        "pdbstr",                                          // exe to run
+        "-w",                                              // write
+        &format!("-p:{}", &op.pdb),                        // path to pdb
+        &format!("-s:srcsrv"),                             // stream to write
+        &format!("-i:{}", tempfile_path.to_slash_lossy()), // file to write into stream
+    ];
+    run_command(cmd)?;
+
+    // Delete tempfile
+    std::fs::remove_file(tempfile_path)?;
 
     Ok(())
 }
@@ -233,55 +239,26 @@ fn extract_one(op: ExtractOneOp) -> anyhow::Result<()> {
 
             // Read response
             let (uuid, pdb_path) = match response {
-                Message::FoundPdb((uuid, Some(path))) => {
-                    (uuid, path)
-                },
-                _ => return Err(anyhow!("extract_one queried service for PDB with uuid [{}], but failed with response: [{:?}]", uuid, response))
+                Message::FoundPdb((uuid, Some(path))) => (uuid, path),
+                _ => {
+                    return Err(anyhow!(
+                        "extract_one queried service for PDB with uuid [{}], but failed with response: [{:?}]",
+                        uuid,
+                        response
+                    ))
+                }
             };
 
             println!("Success! [{}] [{:?}]", uuid, pdb_path);
 
             // Load PDB
-            let pdbfile = File::open(op.pdb)?;
-            let mut pdb = pdb::PDB::open(pdbfile)?;
-
-            /*
-                        let msg = b"Hello!";
-
-                        stream.write(msg).unwrap();
-                        println!("Sent Hello, awaiting reply...");
-
-                        let mut data = [0 as u8; 6]; // using 6 byte buffer
-                        match stream.read_exact(&mut data) {
-                            Ok(_) => {
-                                if &data == msg {
-                                    println!("Reply is ok!");
-                                } else {
-                                    let text = from_utf8(&data).unwrap();
-                                    println!("Unexpected reply: {}", text);
-                                }
-                            },
-                            Err(e) => {
-                                println!("Failed to receive data: {}", e);
-                            }
-                        }
-            */
+            let pdb_file = File::open(pdb_path)?;
+            let _pdb = pdb::PDB::open(pdb_file)?;
         }
         Err(e) => {
             println!("Failed to connect: {}", e);
         }
     }
-
-    // Run extract command
-    /*
-    let _cmd = &[
-        "pdbstr",                                                 // executable
-        "-r",                                                     // read
-        &format!("-p:{}", op.pdb),                                // pdb path
-        &format!("-s:/fts_pdbsrc/{}", op.file),                   // filepath (as stream)
-        &format!("-i:%LOCALAPPDATA%/fts/fts_pdbsrc/{}", op.file), // out file
-    ];
-    */
 
     Ok(())
 }
@@ -333,10 +310,7 @@ fn watch(_: WatchOp) -> anyhow::Result<()> {
     // Find relevant pdbs (pdbs containing srcsrv w/ VERCTRL=fts_pdbsrc
     let mut relevant_pdbs: HashMap<Uuid, PathBuf> = Default::default();
 
-    for entry in WalkDir::new("c:/temp/pdb")
-        .into_iter()
-        .filter_map(|e| e.ok())
-    {
+    for entry in WalkDir::new("c:/temp/pdb").into_iter().filter_map(|e| e.ok()) {
         // Look for files
         if !entry.file_type().is_file() {
             continue;
@@ -373,16 +347,12 @@ fn watch(_: WatchOp) -> anyhow::Result<()> {
         }();
     }
 
-    let handle_connection = |mut stream: &mut TcpStream,
-                             pdb_db: &HashMap<Uuid, PathBuf>|
-     -> anyhow::Result<()> {
+    let handle_connection = |mut stream: &mut TcpStream, pdb_db: &HashMap<Uuid, PathBuf>| -> anyhow::Result<()> {
         loop {
             let msg = read_message(&mut stream)?;
             match msg {
                 Message::FindPdb(uuid) => match pdb_db.get(&uuid) {
-                    Some(path) => {
-                        send_message(&mut stream, Message::FoundPdb((uuid, Some(path.clone()))))?
-                    }
+                    Some(path) => send_message(&mut stream, Message::FoundPdb((uuid, Some(path.clone()))))?,
                     None => send_message(&mut stream, Message::FoundPdb((uuid, None)))?,
                 },
                 _ => return Err(anyhow!("Unexpected message: [{:?}]", msg)),
@@ -409,23 +379,6 @@ fn watch(_: WatchOp) -> anyhow::Result<()> {
 
     Ok(())
 }
-
-/*
-let symbol_table = pdb.global_symbols()?;
-let address_map = pdb.address_map()?;
-
-let mut symbols = symbol_table.iter();
-while let Some(symbol) = symbols.next()? {
-    match symbol.parse() {
-        Ok(pdb::SymbolData::Public(data)) if data.function => {
-            // we found the location of a function!
-            let rva = data.offset.to_rva(&address_map).unwrap_or_default();
-            println!("{} is {}", rva, data.name);
-        }
-        _ => {}
-    }
-}
-*/
 
 fn send_message(stream: &mut TcpStream, message: Message) -> anyhow::Result<()> {
     // Serialize message
@@ -455,4 +408,20 @@ fn read_message(stream: &mut TcpStream) -> anyhow::Result<Message> {
     let message: Message = rmp_serde::from_read_ref(&packet_buf)?;
 
     Ok(message)
+}
+
+fn run_command(cmd: &[&str]) -> anyhow::Result<()> {
+    let mut p = Popen::create(
+        cmd,
+        PopenConfig {
+            stdout: Redirection::Pipe,
+            ..Default::default()
+        },
+    )?;
+
+    let status = p.wait()?;
+    match status {
+        ExitStatus::Exited(0) => Ok(()),
+        _ => bail!("Encountered status [{:?}] on cmd [{:?}]", status, cmd),
+    }
 }
