@@ -300,7 +300,6 @@ fn extract_one(op: ExtractOneOp) -> anyhow::Result<()> {
             let file_stream_str: &str = std::str::from_utf8(&file_stream)?;
 
             // Write to output file
-            println!("Creating file: [{:?}]", op.out);
             let out_dir = op.out.parent().ok_or(anyhow!("Oh no"))?;
             fs::create_dir_all(out_dir)?;
             let mut file = std::fs::File::create(op.out)?;
