@@ -12,6 +12,9 @@ use subprocess::*;
 use uuid::Uuid;
 use walkdir::WalkDir;
 
+// ----------------------------------------------------------------------------
+// Command line argument types
+// ----------------------------------------------------------------------------
 #[derive(StructOpt, Debug)]
 #[structopt(
     name = "fts_pdbsrc",
@@ -52,6 +55,9 @@ struct EmbedOp {
 
 #[derive(Debug, StructOpt)]
 struct ExtractOneOp {
+    #[structopt(short, long, help = "Uuid of PDB to extract from")]
+    pdb_uuid: Uuid,
+
     #[structopt(short, long, help = "File to extract")]
     file: String,
 
@@ -80,11 +86,9 @@ enum Message {
     FoundPdb((Uuid, Option<PathBuf>)),
 }
 
-/*
-fts_pdbsrc --embed --targetpdb foo
-fts_pdbsrc --extract --targetpdb
-*/
-
+// ----------------------------------------------------------------------------
+// Functions
+// ----------------------------------------------------------------------------
 fn main() {
     // Parse args
     let opts: Opts = Opts::from_args();
@@ -205,7 +209,8 @@ fn embed(op: EmbedOp) -> anyhow::Result<(), anyhow::Error> {
     writeln!(srcsrv, "SRCSRVTRG=%LOCALAPPDATA%/fts_pdbsrc/{}/%var2%", uuid)?;
     writeln!(
         srcsrv,
-        "SRCSRVCMD=fts_pdbsrc extract_one --file %var2% --out %SRCSRVTRG%"
+        "SRCSRVCMD=fts_pdbsrc extract_one --pdb-uuid {} --file %var2% --out %SRCSRVTRG%",
+        uuid
     )?;
     writeln!(
         srcsrv,
@@ -253,8 +258,7 @@ fn extract_one(op: ExtractOneOp) -> anyhow::Result<()> {
     match TcpStream::connect("localhost:23685") {
         Ok(mut stream) => {
             // Ask service for PDB path
-            let uuid = Uuid::parse_str("936DA01F9ABD4d9d80C702AF85C822A8")?;
-            send_message(&mut stream, Message::FindPdb(uuid))?;
+            send_message(&mut stream, Message::FindPdb(op.pdb_uuid))?;
 
             // Wait for response
             let response = read_message(&mut stream)?;
@@ -263,22 +267,36 @@ fn extract_one(op: ExtractOneOp) -> anyhow::Result<()> {
             drop(stream);
 
             // Read response
-            let (uuid, pdb_path) = match response {
-                Message::FoundPdb((uuid, Some(path))) => (uuid, path),
+            let (_, pdb_path) = match response {
+                Message::FoundPdb((uuid, Some(path))) => {
+                    assert_eq!(
+                        uuid, op.pdb_uuid,
+                        "Mismatched Uuids. Requested: [{}] Found: [{}]",
+                        op.pdb_uuid, uuid
+                    );
+                    (uuid, path)
+                }
                 _ => {
                     return Err(anyhow!(
                     "extract_one queried service for PDB with uuid [{}], but failed with response: [{:?}]",
-                    uuid,
+                    op.pdb_uuid,
                     response
                 ))
                 }
             };
 
-            println!("Success! [{}] [{:?}]", uuid, pdb_path);
-
             // Load PDB
             let pdb_file = File::open(pdb_path)?;
-            let _pdb = pdb::PDB::open(pdb_file)?;
+            let mut pdb = pdb::PDB::open(pdb_file)?;
+
+            // Get file stream
+            let file_stream = pdb.named_stream(format!("/fts_pdbsr/{}", op.file).as_bytes())?;
+            let file_stream_str: &str = std::str::from_utf8(&file_stream)?;
+
+            // Write to output file
+            println!("Opening file: [{:?}]", op.out);
+            let mut file = std::fs::File::open(op.out)?;
+            file.write_all(file_stream_str.as_bytes())?;
         }
         Err(e) => {
             println!("Failed to connect: {}", e);
