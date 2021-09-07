@@ -41,6 +41,9 @@ enum Op {
 
     #[structopt(name = "watch")]
     Watch(WatchOp),
+
+    #[structopt(name = "install_service")]
+    InstallService(InstallServiceOp)
 }
 
 #[derive(Debug, StructOpt)]
@@ -79,6 +82,9 @@ struct InfoOp {
 #[derive(Debug, StructOpt)]
 struct WatchOp {}
 
+#[derive(Debug, StructOpt)]
+struct InstallServiceOp{}
+
 #[derive(Serialize, Deserialize, Debug)]
 enum Message {
     FindPdb(Uuid),
@@ -112,6 +118,7 @@ fn run(opts: Opts) -> anyhow::Result<()> {
         Op::ExtractAll(op) => extract_all(op)?,
         Op::Info(op) => info(op)?,
         Op::Watch(op) => watch(op)?,
+        Op::InstallService(op) => install_service(op)?,
     }
 
     Ok(())
@@ -447,6 +454,35 @@ fn watch(_: WatchOp) -> anyhow::Result<()> {
 
     println!("No more listeners?");
 
+    Ok(())
+}
+
+fn install_service(_op: InstallServiceOp) -> anyhow::Result<()> {
+    use std::ffi::OsString;
+    use windows_service::{
+        service::{ServiceAccess, ServiceErrorControl, ServiceInfo, ServiceStartType, ServiceType},
+        service_manager::{ServiceManager, ServiceManagerAccess},
+    };
+
+    let manager_access = ServiceManagerAccess::CONNECT | ServiceManagerAccess::CREATE_SERVICE;
+    let service_manager = ServiceManager::local_computer(None::<&str>, manager_access)?;
+
+    let service_binary_path : PathBuf = "fts_pdbsrc_service.exe".into(); // assumed to be on path
+
+    let service_info = ServiceInfo {
+        name: OsString::from("fts_pdbsrc_service"),
+        display_name: OsString::from("FTS PDB Source Service"),
+        service_type: ServiceType::OWN_PROCESS,
+        start_type: ServiceStartType::AutoStart,
+        error_control: ServiceErrorControl::Normal,
+        executable_path: service_binary_path,
+        launch_arguments: vec![],
+        dependencies: vec![],
+        account_name: None, // run as System
+        account_password: None,
+    };
+    let service = service_manager.create_service(&service_info, ServiceAccess::CHANGE_CONFIG)?;
+    service.set_description("PDB scanning service for fts_pdbsrc")?;
     Ok(())
 }
 
