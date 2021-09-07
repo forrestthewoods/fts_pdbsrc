@@ -1,0 +1,15 @@
+[package]
+name = "fts_pdbsrc_service"
+version = "0.1.0"
+edition = "2018"
+
+[dependencies]
+anyhow = "1.0"
+pdb = "0.7.0"
+rmp-serde = "0.15.5"
+serde = { version="1.0.130", features=["derive"]}
+structopt = "0.3.14"
+subprocess = "0.2.7"
+tempfile = "3.2.0"
+uuid = { version = "0.8.2", features = ["serde", "v4"] }
+walkdir = "2.3.2"
