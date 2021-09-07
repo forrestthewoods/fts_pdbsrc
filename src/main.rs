@@ -43,7 +43,10 @@ enum Op {
     Watch(WatchOp),
 
     #[structopt(name = "install_service")]
-    InstallService(InstallServiceOp)
+    InstallService(InstallServiceOp),
+
+    #[structopt(name = "uninstall_service")]
+    UninstallService(UninstallServiceOp),
 }
 
 #[derive(Debug, StructOpt)]
@@ -85,6 +88,9 @@ struct WatchOp {}
 #[derive(Debug, StructOpt)]
 struct InstallServiceOp{}
 
+#[derive(Debug, StructOpt)]
+struct UninstallServiceOp{}
+
 #[derive(Serialize, Deserialize, Debug)]
 enum Message {
     FindPdb(Uuid),
@@ -119,6 +125,7 @@ fn run(opts: Opts) -> anyhow::Result<()> {
         Op::Info(op) => info(op)?,
         Op::Watch(op) => watch(op)?,
         Op::InstallService(op) => install_service(op)?,
+        Op::UninstallService(op) => uninstall_service(op)?,
     }
 
     Ok(())
@@ -467,7 +474,7 @@ fn install_service(_op: InstallServiceOp) -> anyhow::Result<()> {
     let manager_access = ServiceManagerAccess::CONNECT | ServiceManagerAccess::CREATE_SERVICE;
     let service_manager = ServiceManager::local_computer(None::<&str>, manager_access)?;
 
-    let service_binary_path : PathBuf = "fts_pdbsrc_service.exe".into(); // assumed to be on path
+    let service_binary_path : PathBuf = "c:/stuff/path/fts_pdbsrc_service.exe".into(); // assumed to be on path
 
     let service_info = ServiceInfo {
         name: OsString::from("fts_pdbsrc_service"),
@@ -481,8 +488,38 @@ fn install_service(_op: InstallServiceOp) -> anyhow::Result<()> {
         account_name: None, // run as System
         account_password: None,
     };
-    let service = service_manager.create_service(&service_info, ServiceAccess::CHANGE_CONFIG)?;
+    let service = service_manager.create_service(&service_info, ServiceAccess::CHANGE_CONFIG | ServiceAccess::START)?;
     service.set_description("PDB scanning service for fts_pdbsrc")?;
+    
+    println!("Starting service!");
+    let start_args : Vec<std::ffi::OsString> = Default::default();
+    service.start(&start_args)?;
+    println!("Service started");
+    Ok(())
+}
+
+fn uninstall_service(_op: UninstallServiceOp) -> anyhow::Result<()> {
+    use std::{thread, time::Duration};
+    use windows_service::{
+        service::{ServiceAccess, ServiceState},
+        service_manager::{ServiceManager, ServiceManagerAccess},
+    };
+
+    let manager_access = ServiceManagerAccess::CONNECT;
+    let service_manager = ServiceManager::local_computer(None::<&str>, manager_access)?;
+
+    let service_access = ServiceAccess::QUERY_STATUS | ServiceAccess::STOP | ServiceAccess::DELETE;
+    let service = service_manager.open_service("fts_pdbsrc_service", service_access)?;
+
+    let service_status = service.query_status()?;
+    if service_status.current_state != ServiceState::Stopped {
+        service.stop()?;
+        // Wait for service to stop
+        thread::sleep(Duration::from_secs(1));
+    }
+
+    service.delete()?;
+
     Ok(())
 }
 

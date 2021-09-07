@@ -1,7 +1,11 @@
-
 #[cfg(windows)]
 fn main() -> windows_service::Result<()> {
-    ping_service::run()
+    use std::fs::File;
+    use std::io::{Write, BufReader, BufRead, Error};
+
+    let mut log : File = File::create("c:/temp/service_log_main.txt").unwrap();
+    writeln!(log, "Begin run_service").unwrap();
+    fts_pdbsrc_service::run()
 }
 
 #[cfg(not(windows))]
@@ -10,13 +14,17 @@ fn main() {
 }
 
 #[cfg(windows)]
-mod ping_service {
+mod fts_pdbsrc_service {
+    use anyhow::*;
     use std::{
         ffi::OsString,
+        fs::File,
+        io::{Write, BufReader, BufRead, Error},
         net::{IpAddr, SocketAddr, UdpSocket},
         sync::mpsc,
         time::Duration,
     };
+
     use windows_service::{
         define_windows_service,
         service::{
@@ -51,7 +59,10 @@ mod ping_service {
         }
     }
 
-    pub fn run_service() -> Result<()> {
+    pub fn run_service() -> anyhow::Result<()> {
+        let mut log : File = File::create("c:/temp/service_log.txt").unwrap();
+        writeln!(log, "Begin run_service")?;
+
         // Create a channel to be able to poll a stop event from the service worker loop.
         let (shutdown_tx, shutdown_rx) = mpsc::channel();
 
@@ -72,9 +83,14 @@ mod ping_service {
             }
         };
 
+        writeln!(log, "register").unwrap();
+
+
         // Register system service event handler.
         // The returned status handle should be used to report service status changes to the system.
         let status_handle = service_control_handler::register(SERVICE_NAME, event_handler)?;
+
+        writeln!(log, "set status").unwrap();
 
         // Tell the system that service is running
         status_handle.set_service_status(ServiceStatus {
@@ -87,9 +103,11 @@ mod ping_service {
             process_id: None,
         })?;
 
+        writeln!(log, "begin do stuff").unwrap();
+
+
         // BEGIN DO STUFF
         loop {
-
             // Poll shutdown event.
             match shutdown_rx.recv_timeout(Duration::from_secs(1)) {
                 // Break the loop either upon stop or channel disconnect
@@ -101,6 +119,7 @@ mod ping_service {
         }
         // END DO STUFF
 
+        writeln!(log, "end do stuff").unwrap();
 
         // Tell the system that service has stopped.
         status_handle.set_service_status(ServiceStatus {
@@ -112,6 +131,8 @@ mod ping_service {
             wait_hint: Duration::default(),
             process_id: None,
         })?;
+
+        writeln!(log, "stopping").unwrap();
 
         Ok(())
     }

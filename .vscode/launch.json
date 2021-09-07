@@ -53,5 +53,18 @@
             "environment": [],
             "externalConsole": false,
         },
+        {
+            "name": "Install Service (Debug)",
+            "type": "cppvsdbg",
+            "request": "launch",
+            "program": "${workspaceRoot}/target/debug/fts_pdbsrc.exe",
+            "args": [
+                "install_service",
+            ],
+            "stopAtEntry": false,
+            "cwd": "${workspaceRoot}",
+            "environment": [],
+            "externalConsole": false,
+        },
     ]
 }
