@@ -219,7 +219,7 @@ fn embed(op: EmbedOp) -> anyhow::Result<(), anyhow::Error> {
     )?;
     writeln!(
         srcsrv,
-        "SRCSRVCMD=fts_pdbsrc extract_one --pdb-uuid {} --file %var2% --out %SRCSRVTRG%",
+        "SRCSRVCMD=fts_pdbsrc extract_one --pdb-uuid %FTS_PDBSTR_UUID% --file %var2% --out %SRCSRVTRG%",
         uuid
     )?;
     writeln!(
