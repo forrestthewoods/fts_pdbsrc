@@ -471,30 +471,33 @@ fn install_service(_op: InstallServiceOp) -> anyhow::Result<()> {
         service_manager::{ServiceManager, ServiceManagerAccess},
     };
 
-    let manager_access = ServiceManagerAccess::CONNECT | ServiceManagerAccess::CREATE_SERVICE;
-    let service_manager = ServiceManager::local_computer(None::<&str>, manager_access)?;
+    // Find where
+    let service_exe_path = which::which("fts_pdbsrc_service.exe").expect("Could not find fts_pdbsrc_service.exe on PATH.");
 
-    let service_binary_path : PathBuf = "c:/stuff/path/fts_pdbsrc_service.exe".into(); // assumed to be on path
+    || -> anyhow::Result<()> {
+        let manager_access = ServiceManagerAccess::CONNECT | ServiceManagerAccess::CREATE_SERVICE;
+        let service_manager = ServiceManager::local_computer(None::<&str>, manager_access)?;
 
-    let service_info = ServiceInfo {
-        name: OsString::from("fts_pdbsrc_service"),
-        display_name: OsString::from("FTS PDB Source Service"),
-        service_type: ServiceType::OWN_PROCESS,
-        start_type: ServiceStartType::AutoStart,
-        error_control: ServiceErrorControl::Normal,
-        executable_path: service_binary_path,
-        launch_arguments: vec![],
-        dependencies: vec![],
-        account_name: None, // run as System
-        account_password: None,
-    };
-    let service = service_manager.create_service(&service_info, ServiceAccess::CHANGE_CONFIG | ServiceAccess::START)?;
-    service.set_description("PDB scanning service for fts_pdbsrc")?;
-    
-    println!("Starting service!");
-    let start_args : Vec<std::ffi::OsString> = Default::default();
-    service.start(&start_args)?;
-    println!("Service started");
+        let service_info = ServiceInfo {
+            name: OsString::from("fts_pdbsrc_service"),
+            display_name: OsString::from("FTS PDB Source Service"),
+            service_type: ServiceType::OWN_PROCESS,
+            start_type: ServiceStartType::AutoStart,
+            error_control: ServiceErrorControl::Normal,
+            executable_path: service_exe_path,
+            launch_arguments: vec![],
+            dependencies: vec![],
+            account_name: None, // run as System
+            account_password: None,
+        };
+        let service = service_manager.create_service(&service_info, ServiceAccess::CHANGE_CONFIG | ServiceAccess::START)?;
+        service.set_description("PDB scanning service for fts_pdbsrc")?;
+        
+        let start_args : Vec<std::ffi::OsString> = Default::default();
+        service.start(&start_args)?;
+        Ok(())
+    }().expect("Failed to start service. Are you running as administrator?");
+
     Ok(())
 }
 
