@@ -111,6 +111,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "fts_pdbsrc_service"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "pdb",
+ "rmp-serde",
+ "serde",
+ "structopt",
+ "subprocess",
+ "tempfile",
+ "uuid",
+ "walkdir",
+ "windows-service",
+]
+
+[[package]]
 name = "getrandom"
 version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
