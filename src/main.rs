@@ -44,10 +44,16 @@ enum Op {
     #[structopt(name = "watch")]
     Watch(WatchOp),
 
-    #[structopt(name = "install_service", about = "Install fts_pdbsrc_service.exe as Windows service")]
+    #[structopt(
+        name = "install_service",
+        about = "Install fts_pdbsrc_service.exe as Windows service"
+    )]
     InstallService(InstallServiceOp),
 
-    #[structopt(name = "uninstall_service", about = "Uninstall fts_pdbsrc_service.exe from Windows services")]
+    #[structopt(
+        name = "uninstall_service",
+        about = "Uninstall fts_pdbsrc_service.exe from Windows services"
+    )]
     UninstallService(UninstallServiceOp),
 }
 
@@ -88,10 +94,10 @@ struct InfoOp {
 struct WatchOp {}
 
 #[derive(Debug, StructOpt)]
-struct InstallServiceOp{}
+struct InstallServiceOp {}
 
 #[derive(Debug, StructOpt)]
-struct UninstallServiceOp{}
+struct UninstallServiceOp {}
 
 #[derive(Serialize, Deserialize, Debug)]
 enum Message {
@@ -474,7 +480,8 @@ fn install_service(_op: InstallServiceOp) -> anyhow::Result<()> {
     };
 
     // Find where
-    let service_exe_path = which::which("fts_pdbsrc_service.exe").expect("Could not find fts_pdbsrc_service.exe on PATH.");
+    let service_exe_path =
+        which::which("fts_pdbsrc_service.exe").expect("Could not find fts_pdbsrc_service.exe on PATH.");
 
     || -> anyhow::Result<()> {
         let manager_access = ServiceManagerAccess::CONNECT | ServiceManagerAccess::CREATE_SERVICE;
@@ -492,13 +499,15 @@ fn install_service(_op: InstallServiceOp) -> anyhow::Result<()> {
             account_name: None, // run as System
             account_password: None,
         };
-        let service = service_manager.create_service(&service_info, ServiceAccess::CHANGE_CONFIG | ServiceAccess::START)?;
+        let service = service_manager
+            .create_service(&service_info, ServiceAccess::CHANGE_CONFIG | ServiceAccess::START)?;
         service.set_description("PDB scanning service for fts_pdbsrc")?;
-        
-        let start_args : Vec<std::ffi::OsString> = Default::default();
+
+        let start_args: Vec<std::ffi::OsString> = Default::default();
         service.start(&start_args)?;
         Ok(())
-    }().expect("Failed to start service. Are you running as administrator?");
+    }()
+    .expect("Failed to start service. Are you running as administrator?");
 
     Ok(())
 }
