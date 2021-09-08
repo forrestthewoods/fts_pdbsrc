@@ -27,25 +27,27 @@ struct Opts {
 
 #[derive(StructOpt, Debug)]
 enum Op {
-    #[structopt(name = "embed")]
+    #[structopt(name = "embed", about = "Embed all source files into PDB")]
     Embed(EmbedOp),
 
-    #[structopt(name = "extract_one")]
+    #[structopt(name = "extract_one", about = "Extract single source file from PDB")]
     ExtractOne(ExtractOneOp),
 
+    // TODO: delete?
     #[structopt(name = "extract_all")]
     ExtractAll(ExtractAllOp),
 
-    #[structopt(name = "info")]
+    #[structopt(name = "info", about = "Dump files and streams in PDB")]
     Info(InfoOp),
 
+    // TODO: delete
     #[structopt(name = "watch")]
     Watch(WatchOp),
 
-    #[structopt(name = "install_service")]
+    #[structopt(name = "install_service", about = "Install fts_pdbsrc_service.exe as Windows service")]
     InstallService(InstallServiceOp),
 
-    #[structopt(name = "uninstall_service")]
+    #[structopt(name = "uninstall_service", about = "Uninstall fts_pdbsrc_service.exe from Windows services")]
     UninstallService(UninstallServiceOp),
 }
 
