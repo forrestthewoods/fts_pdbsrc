@@ -1,6 +1,58 @@
+use anyhow::*;
+
 #[cfg(windows)]
-fn main() -> windows_service::Result<()> {
-    fts_pdbsrc_service::run()
+fn main() -> anyhow::Result<()> {
+    // Init logging
+    init_logging()?;
+
+    // Run program (convert enum to anyhow::error)
+    match fts_pdbsrc_service::run() {
+        Ok(_) => Ok(()),
+        Err(e) => bail!(e),
+    }
+}
+
+fn init_logging() -> anyhow::Result<()> {
+    // Find log dir
+    let log_dir = dirs::data_local_dir()
+        .expect("Failed to local dir")
+        .join("fts/fts_pdbsrc_service/logs");
+    std::fs::create_dir_all(&log_dir)?;
+
+    // Delete old log files
+    let one_week_in_seconds = std::time::Duration::from_secs(60 * 60 * 24 * 7);
+    for entry in std::fs::read_dir(&log_dir)? {
+        let entry = entry?;
+        let metadata = entry.metadata()?;
+        if metadata.is_file() {
+            let modified = metadata.modified()?;
+            match std::time::SystemTime::now().duration_since(modified) {
+                Ok(elapsed) => {
+                    if elapsed > one_week_in_seconds {
+                        // Delete old logs
+                        std::fs::remove_file(entry.path())?;
+                    }
+                }
+                _ => (), // ignore errors
+            }
+        }
+    }
+
+    // Create new log file
+    let local_time = chrono::Local::now();
+    let new_log_path = log_dir.join(local_time.format("%Y-%m-%d--%Hh-%Mm-%Ss.log").to_string());
+
+    // Initialize simple log
+    use simplelog::*;
+    CombinedLogger::init(vec![WriteLogger::new(
+        LevelFilter::Trace,
+        Config::default(),
+        std::fs::File::create(new_log_path)?,
+    )])?;
+
+    log::info!("Created on: {}", local_time);
+
+    Ok(())
 }
 
 #[cfg(not(windows))]
@@ -11,6 +63,7 @@ fn main() {
 #[cfg(windows)]
 mod fts_pdbsrc_service {
     use anyhow::*;
+    use log::{info, trace, warn};
     use serde::{Deserialize, Serialize};
     use std::{
         collections::HashMap,
@@ -38,6 +91,8 @@ mod fts_pdbsrc_service {
     const SERVICE_TYPE: ServiceType = ServiceType::OWN_PROCESS;
 
     pub fn run() -> Result<()> {
+        info!("Starting service");
+
         // Register generated `ffi_service_main` with the system and start the service, blocking
         // this thread until the service is stopped.
         service_dispatcher::start(SERVICE_NAME, ffi_service_main)
@@ -82,8 +137,9 @@ mod fts_pdbsrc_service {
         // Register system service event handler.
         // The returned status handle should be used to report service status changes to the system.
         let status_handle = service_control_handler::register(SERVICE_NAME, event_handler)?;
-
+        
         // Tell the system that service is running
+        info!("Setting service to running");
         status_handle.set_service_status(ServiceStatus {
             service_type: SERVICE_TYPE,
             current_state: ServiceState::Running,
@@ -131,6 +187,8 @@ mod fts_pdbsrc_service {
     }
 
     fn accept_connections() -> anyhow::Result<()> {
+        info!("Finding initial PDBs");
+
         // Find relevant pdbs (pdbs containing srcsrv w/ VERCTRL=fts_pdbsrc
         let mut relevant_pdbs: HashMap<Uuid, PathBuf> = Default::default();
 
@@ -180,6 +238,7 @@ mod fts_pdbsrc_service {
             }();
         }
 
+        info!("Accepting connections");
         let handle_connection =
             |mut stream: &mut TcpStream, pdb_db: &HashMap<Uuid, PathBuf>| -> anyhow::Result<()> {
                 loop {
@@ -187,6 +246,7 @@ mod fts_pdbsrc_service {
                     match msg {
                         Message::FindPdb(uuid) => match pdb_db.get(&uuid) {
                             Some(path) => {
+                                trace!("Found path [{:?}] for uuid [{}]", path, uuid);
                                 send_message(&mut stream, Message::FoundPdb((uuid, Some(path.clone()))))?
                             }
                             None => send_message(&mut stream, Message::FoundPdb((uuid, None)))?,
@@ -207,7 +267,7 @@ mod fts_pdbsrc_service {
                         stream.shutdown(std::net::Shutdown::Both).unwrap();
                     });
                 }
-                Err(e) => println!("Error accepting listener: [{}]", e),
+                Err(e) => warn!("Error accepting listener: [{}]", e),
             }
         }
 

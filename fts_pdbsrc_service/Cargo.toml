@@ -5,9 +5,13 @@ edition = "2018"
 
 [dependencies]
 anyhow = "1.0"
+chrono = "0.4.19"
+dirs = "3.0.2"
+log = "0.4.14"
 pdb = "0.7.0"
 rmp-serde = "0.15.5"
 serde = { version="1.0.130", features=["derive"]}
+simplelog = "0.10.0"
 structopt = "0.3.14"
 subprocess = "0.2.7"
 tempfile = "3.2.0"
