@@ -250,59 +250,6 @@ mod fts_pdbsrc_service {
     }
 
     fn accept_connections(relevant_pdbs: Arc<Mutex<HashMap<Uuid, PathBuf>>>) -> anyhow::Result<()> {
-        log::info!("Finding initial PDBs");
-
-        // Find relevant pdbs (pdbs containing srcsrv w/ VERCTRL=fts_pdbsrc
-        /*
-            let mut relevant_pdbs: HashMap<Uuid, PathBuf> = Default::default();
-
-        for entry in WalkDir::new("c:/temp/pdb").into_iter().filter_map(|e| e.ok()) {
-            // Look for files
-            if !entry.file_type().is_file() {
-                continue;
-            }
-
-            // Look for files that end with .pdb
-            if !entry
-                .file_name()
-                .to_str()
-                .map_or(false, |filename| filename.ends_with(".pdb"))
-            {
-                continue;
-            }
-
-            // Check if this pdb is an fts
-            // Use lambda for conveient result catching
-            let _ = || -> anyhow::Result<()> {
-                // Open PDB
-                let pdbfile = File::open(entry.path())?;
-                let mut pdb = pdb::PDB::open(pdbfile)?;
-
-                // Get srcsrv stream
-                let srcsrv_stream = pdb.named_stream("srcsrv".as_bytes())?;
-                let srcsrv_str: &str = std::str::from_utf8(&srcsrv_stream)?;
-
-                // Verify srcsrv is compatible
-                if srcsrv_str.contains("VERCTRL=fts_pdbsrc") && srcsrv_str.contains("VERSION=1") {
-                    // Extract Uuid
-                    let key = "FTS_PDBSTR_UUID=";
-                    let uuid: Uuid = srcsrv_str
-                        .lines()
-                        .find(|line| line.starts_with(key))
-                        .and_then(|line| Uuid::parse_str(&line[key.len()..]).ok())
-                        .ok_or(anyhow!("Failed to parse Uuid.\n{}", srcsrv_str))?;
-
-                    // Store result
-                    relevant_pdbs.insert(uuid, entry.path().to_path_buf());
-                } else {
-                    bail!("Incompatible srcsrv.\n{}", srcsrv_str);
-                }
-
-                Ok(())
-            }();
-        }
-        */
-
         log::info!("Accepting connections");
         let handle_connection =
             |mut stream: &mut TcpStream, pdb_db: Arc<Mutex<HashMap<Uuid, PathBuf>>>| -> anyhow::Result<()> {
