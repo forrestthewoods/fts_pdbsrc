@@ -147,18 +147,17 @@ mod fts_pdbsrc_service {
                     let entry = entry.unwrap();
                     let metadata = entry.metadata().unwrap();
                     let entry_path = entry.path();
-                    if metadata.is_dir() || entry_path.ends_with(".pdb") {
+                    if metadata.is_dir() || entry_path.extension().map(|ext| ext == "pdb").unwrap_or(false) {
                         worker.push(entry_path);
                     }
                 }
             } else {
-                assert!(path.ends_with(".pdb"));
                 // Check if PDB is an fts_pdbsrc PDB
                 let result = || -> anyhow::Result<(Uuid, PathBuf)> {
                     // Open PDB
                     let pdbfile = File::open(&path)?;
                     let mut pdb = pdb::PDB::open(pdbfile)?;
-
+                    
                     // Get srcsrv stream
                     let srcsrv_stream = pdb.named_stream("srcsrv".as_bytes())?;
                     let srcsrv_str: &str = std::str::from_utf8(&srcsrv_stream)?;
@@ -180,6 +179,7 @@ mod fts_pdbsrc_service {
                     }
                 }()
                 .ok();
+
                 return result;
             }
 
@@ -187,7 +187,7 @@ mod fts_pdbsrc_service {
         };
 
         // TODO: get path from config
-        let initial_paths: Vec<PathBuf> = vec!["c:/temp/pdb".into()];
+        let initial_paths: Vec<PathBuf> = vec!["c:/temp".into()];
         log::info!("Searching initial paths for PDBs. [{:?}]", initial_paths);
         let start = std::time::Instant::now();
         let pdbs =
@@ -196,7 +196,6 @@ mod fts_pdbsrc_service {
                 .collect::<HashMap<Uuid, PathBuf>>();
         log::info!("Search time [{:?}]", std::time::Instant::now() - start);
         log::info!("Initial PDBs: [{:?}]", pdbs);
-        
 
         let pdbs: Arc<Mutex<HashMap<Uuid, PathBuf>>> = Arc::new(Mutex::new(pdbs));
 
