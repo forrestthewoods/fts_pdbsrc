@@ -1,5 +1,7 @@
 use anyhow::*;
 
+mod job_system;
+
 #[cfg(windows)]
 fn main() -> anyhow::Result<()> {
     // Init logging
@@ -63,7 +65,6 @@ fn main() {
 #[cfg(windows)]
 mod fts_pdbsrc_service {
     use anyhow::*;
-    use log::{info, trace, warn};
     use serde::{Deserialize, Serialize};
     use std::{
         collections::HashMap,
@@ -87,11 +88,12 @@ mod fts_pdbsrc_service {
         service_dispatcher, Result,
     };
 
+
     const SERVICE_NAME: &str = "fts_pdbsrc_service";
     const SERVICE_TYPE: ServiceType = ServiceType::OWN_PROCESS;
 
     pub fn run() -> Result<()> {
-        info!("Starting service");
+        log::info!("Starting service");
 
         // Register generated `ffi_service_main` with the system and start the service, blocking
         // this thread until the service is stopped.
@@ -139,7 +141,7 @@ mod fts_pdbsrc_service {
         let status_handle = service_control_handler::register(SERVICE_NAME, event_handler)?;
         
         // Tell the system that service is running
-        info!("Setting service to running");
+        log::info!("Setting service to running");
         status_handle.set_service_status(ServiceStatus {
             service_type: SERVICE_TYPE,
             current_state: ServiceState::Running,
@@ -187,7 +189,7 @@ mod fts_pdbsrc_service {
     }
 
     fn accept_connections() -> anyhow::Result<()> {
-        info!("Finding initial PDBs");
+        log::info!("Finding initial PDBs");
 
         // Find relevant pdbs (pdbs containing srcsrv w/ VERCTRL=fts_pdbsrc
         let mut relevant_pdbs: HashMap<Uuid, PathBuf> = Default::default();
@@ -238,7 +240,7 @@ mod fts_pdbsrc_service {
             }();
         }
 
-        info!("Accepting connections");
+        log::info!("Accepting connections");
         let handle_connection =
             |mut stream: &mut TcpStream, pdb_db: &HashMap<Uuid, PathBuf>| -> anyhow::Result<()> {
                 loop {
@@ -246,7 +248,7 @@ mod fts_pdbsrc_service {
                     match msg {
                         Message::FindPdb(uuid) => match pdb_db.get(&uuid) {
                             Some(path) => {
-                                trace!("Found path [{:?}] for uuid [{}]", path, uuid);
+                                log::trace!("Found path [{:?}] for uuid [{}]", path, uuid);
                                 send_message(&mut stream, Message::FoundPdb((uuid, Some(path.clone()))))?
                             }
                             None => send_message(&mut stream, Message::FoundPdb((uuid, None)))?,
@@ -267,7 +269,7 @@ mod fts_pdbsrc_service {
                         stream.shutdown(std::net::Shutdown::Both).unwrap();
                     });
                 }
-                Err(e) => warn!("Error accepting listener: [{}]", e),
+                Err(e) => log::warn!("Error accepting listener: [{}]", e),
             }
         }
 

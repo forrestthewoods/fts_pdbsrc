@@ -6,6 +6,8 @@ edition = "2018"
 [dependencies]
 anyhow = "1.0"
 chrono = "0.4.19"
+crossbeam-deque = "0.7.3"
+crossbeam-utils = "0.7.2"
 dirs = "3.0.2"
 log = "0.4.14"
 pdb = "0.7.0"
