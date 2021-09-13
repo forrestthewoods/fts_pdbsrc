@@ -10,6 +10,7 @@ crossbeam-deque = "0.7.3"
 crossbeam-utils = "0.7.2"
 dirs = "3.0.2"
 log = "0.4.14"
+num_cpus = "1.13.0"
 pdb = "0.7.0"
 rmp-serde = "0.15.5"
 serde = { version="1.0.130", features=["derive"]}
@@ -18,5 +19,4 @@ structopt = "0.3.14"
 subprocess = "0.2.7"
 tempfile = "3.2.0"
 uuid = { version = "0.8.2", features = ["serde", "v4"] }
-walkdir = "2.3.2"
 windows-service = "0.4.0"

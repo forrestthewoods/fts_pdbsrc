@@ -65,6 +65,7 @@ fn main() {
 #[cfg(windows)]
 mod fts_pdbsrc_service {
     use anyhow::*;
+    use crossbeam_deque::Worker;
     use serde::{Deserialize, Serialize};
     use std::{
         collections::HashMap,
@@ -73,11 +74,10 @@ mod fts_pdbsrc_service {
         io::{Read, Write},
         net::{TcpListener, TcpStream},
         path::PathBuf,
-        sync::mpsc,
+        sync::{mpsc, Arc, Mutex},
         time::Duration,
     };
     use uuid::Uuid;
-    use walkdir::WalkDir;
 
     use windows_service::{
         define_windows_service,
@@ -87,7 +87,6 @@ mod fts_pdbsrc_service {
         service_control_handler::{self, ServiceControlHandlerResult},
         service_dispatcher, Result,
     };
-
 
     const SERVICE_NAME: &str = "fts_pdbsrc_service";
     const SERVICE_TYPE: ServiceType = ServiceType::OWN_PROCESS;
@@ -139,7 +138,73 @@ mod fts_pdbsrc_service {
         // Register system service event handler.
         // The returned status handle should be used to report service status changes to the system.
         let status_handle = service_control_handler::register(SERVICE_NAME, event_handler)?;
+
+        // Initialize PDBs
+        let recursive_job = |path: PathBuf, worker: &Worker<_>| -> Option<(Uuid, PathBuf)> {
+            // Push dir contects
+            if path.is_dir() {
+                for entry in std::fs::read_dir(path).ok().unwrap() {
+                    let entry = entry.unwrap();
+                    let metadata = entry.metadata().unwrap();
+                    let entry_path = entry.path();
+                    if metadata.is_dir() || entry_path.ends_with(".pdb") {
+                        worker.push(entry_path);
+                    }
+                }
+            } else {
+                assert!(path.ends_with(".pdb"));
+                // Check if PDB is an fts_pdbsrc PDB
+                let result = || -> anyhow::Result<(Uuid, PathBuf)> {
+                    // Open PDB
+                    let pdbfile = File::open(&path)?;
+                    let mut pdb = pdb::PDB::open(pdbfile)?;
+
+                    // Get srcsrv stream
+                    let srcsrv_stream = pdb.named_stream("srcsrv".as_bytes())?;
+                    let srcsrv_str: &str = std::str::from_utf8(&srcsrv_stream)?;
+
+                    // Verify srcsrv is compatible
+                    if srcsrv_str.contains("VERCTRL=fts_pdbsrc") && srcsrv_str.contains("VERSION=1") {
+                        // Extract Uuid
+                        let key = "FTS_PDBSTR_UUID=";
+                        let uuid: Uuid = srcsrv_str
+                            .lines()
+                            .find(|line| line.starts_with(key))
+                            .and_then(|line| Uuid::parse_str(&line[key.len()..]).ok())
+                            .ok_or(anyhow!("Failed to parse Uuid.\n{}", srcsrv_str))?;
+
+                        // Return result
+                        Ok((uuid, path))
+                    } else {
+                        bail!("Incompatible srcsrv.\n{}", srcsrv_str);
+                    }
+                }()
+                .ok();
+                return result;
+            }
+
+            None
+        };
+
+        // TODO: get path from config
+        let initial_paths: Vec<PathBuf> = vec!["c:/temp/pdb".into()];
+        log::info!("Searching initial paths for PDBs. [{:?}]", initial_paths);
+        let start = std::time::Instant::now();
+        let pdbs =
+            crate::job_system::run_recursive_job(initial_paths, recursive_job, num_cpus::get_physical())
+                .into_iter()
+                .collect::<HashMap<Uuid, PathBuf>>();
+        log::info!("Search time [{:?}]", std::time::Instant::now() - start);
+        log::info!("Initial PDBs: [{:?}]", pdbs);
         
+
+        let pdbs: Arc<Mutex<HashMap<Uuid, PathBuf>>> = Arc::new(Mutex::new(pdbs));
+
+        // TODO: add watch via notify crate
+
+        // BEGIN DO STUFF
+        std::thread::spawn(move || accept_connections(pdbs));
+
         // Tell the system that service is running
         log::info!("Setting service to running");
         status_handle.set_service_status(ServiceStatus {
@@ -151,9 +216,6 @@ mod fts_pdbsrc_service {
             wait_hint: Duration::default(),
             process_id: None,
         })?;
-
-        // BEGIN DO STUFF
-        std::thread::spawn(|| accept_connections());
 
         loop {
             // Poll shutdown event.
@@ -188,11 +250,12 @@ mod fts_pdbsrc_service {
         FoundPdb((Uuid, Option<PathBuf>)),
     }
 
-    fn accept_connections() -> anyhow::Result<()> {
+    fn accept_connections(relevant_pdbs: Arc<Mutex<HashMap<Uuid, PathBuf>>>) -> anyhow::Result<()> {
         log::info!("Finding initial PDBs");
 
         // Find relevant pdbs (pdbs containing srcsrv w/ VERCTRL=fts_pdbsrc
-        let mut relevant_pdbs: HashMap<Uuid, PathBuf> = Default::default();
+        /*
+            let mut relevant_pdbs: HashMap<Uuid, PathBuf> = Default::default();
 
         for entry in WalkDir::new("c:/temp/pdb").into_iter().filter_map(|e| e.ok()) {
             // Look for files
@@ -239,14 +302,15 @@ mod fts_pdbsrc_service {
                 Ok(())
             }();
         }
+        */
 
         log::info!("Accepting connections");
         let handle_connection =
-            |mut stream: &mut TcpStream, pdb_db: &HashMap<Uuid, PathBuf>| -> anyhow::Result<()> {
+            |mut stream: &mut TcpStream, pdb_db: Arc<Mutex<HashMap<Uuid, PathBuf>>>| -> anyhow::Result<()> {
                 loop {
                     let msg = read_message(&mut stream)?;
                     match msg {
-                        Message::FindPdb(uuid) => match pdb_db.get(&uuid) {
+                        Message::FindPdb(uuid) => match pdb_db.lock().unwrap().get(&uuid) {
                             Some(path) => {
                                 log::trace!("Found path [{:?}] for uuid [{}]", path, uuid);
                                 send_message(&mut stream, Message::FoundPdb((uuid, Some(path.clone()))))?
@@ -265,7 +329,7 @@ mod fts_pdbsrc_service {
                 Ok(mut stream) => {
                     let pdb_copy = relevant_pdbs.clone();
                     std::thread::spawn(move || {
-                        let _ = handle_connection(&mut stream, &pdb_copy);
+                        let _ = handle_connection(&mut stream, pdb_copy);
                         stream.shutdown(std::net::Shutdown::Both).unwrap();
                     });
                 }
