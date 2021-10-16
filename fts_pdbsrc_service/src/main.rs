@@ -5,10 +5,21 @@ fn main() -> anyhow::Result<()> {
     // Init logging
     init_logging()?;
 
+    std::panic::set_hook(Box::new(|panic_info| {
+        if let Some(s) = panic_info.payload().downcast_ref::<&str>() {
+            log::error!("panic occurred: {:?}", s);
+        } else {
+            log::error!("panic occurred");
+        }
+    }));
+
     // Run program (convert enum to anyhow::error)
     match fts_pdbsrc_service::run() {
         Ok(_) => Ok(()),
-        Err(e) => bail!(e),
+        Err(e) => {
+            log::error!("Unexpected error: [{}]", e);
+            bail!(e);
+        }
     }
 }
 
@@ -75,7 +86,6 @@ mod fts_pdbsrc_service {
         time::Duration,
     };
     use uuid::Uuid;
-    use walkdir::WalkDir;
 
     use windows_service::{
         define_windows_service,
@@ -88,6 +98,17 @@ mod fts_pdbsrc_service {
 
     const SERVICE_NAME: &str = "fts_pdbsrc_service";
     const SERVICE_TYPE: ServiceType = ServiceType::OWN_PROCESS;
+
+    #[derive(Clone, Debug, Serialize, Deserialize)]
+    struct Config {
+        pub paths: Vec<ConfigPath>,
+    }
+
+    #[derive(Clone, Debug, Serialize, Deserialize)]
+    struct ConfigPath {
+        pub path: PathBuf,
+        pub follow_symlinks: bool,
+    }
 
     pub fn run() -> Result<()> {
         log::info!("Starting service");
@@ -138,7 +159,7 @@ mod fts_pdbsrc_service {
         let status_handle = service_control_handler::register(SERVICE_NAME, event_handler)?;
 
         // Tell the system that service is initializing itself
-        log::info!("Setting service to running");
+        log::info!("Setting service to StartPending");
         status_handle.set_service_status(ServiceStatus {
             service_type: SERVICE_TYPE,
             current_state: ServiceState::StartPending,
@@ -182,16 +203,28 @@ mod fts_pdbsrc_service {
             }
         };
 
-        // TODO: get path from config
-        let initial_paths: Vec<PathBuf> = vec!["c:/temp".into()];
-        log::info!("Searching initial paths for PDBs. [{:?}]", initial_paths);
+        // Load config
+        let mut config_path = std::env::current_exe()?;
+        config_path.set_file_name("fts_pdbsrc_service_config.json");
+        log::info!("Loading config: [{:?}]", config_path);
+
+        let config_file = std::fs::File::open(&config_path)?;
+        log::info!("Parsing config");
+        let config: Config = serde_json::from_reader(&config_file)?;
+        log::info!("Loaded config: [{:?}]", config);
+
+        // Initialize PDBs from config paths
+        log::info!("Searching initial paths for PDBs.");
         let start = std::time::Instant::now();
-        let pdbs = initial_paths
+
+        let pdbs = config
+            .paths
             .iter()
-            .flat_map(|root| {
-                WalkDir::new(root)
+            .flat_map(|path_entry| {
+                walkdir::WalkDir::new(&path_entry.path)
+                    .follow_links(path_entry.follow_symlinks)
                     .into_iter()
-                    .filter_map(|entry| process_entry(entry.unwrap()).ok())
+                    .filter_map(|dir_entry| process_entry(dir_entry.unwrap()).ok())
             })
             .collect::<HashMap<Uuid, PathBuf>>();
 
@@ -201,6 +234,15 @@ mod fts_pdbsrc_service {
         let pdbs: Arc<Mutex<HashMap<Uuid, PathBuf>>> = Arc::new(Mutex::new(pdbs));
 
         // TODO: add watch via notify crate
+        // Watch config
+        log::info!("Configuring watch events for config and config paths");
+
+        let mut hotwatch = hotwatch::Hotwatch::new().expect("hotwatch failed to initialize!");
+        hotwatch.watch(&config_path, |event: hotwatch::Event| {
+            if let hotwatch::Event::Write(path) = event {
+                println!("[{:?}] has changed.", path);
+            }
+        }).expect(&format!("failed to watch [{:?}]!", &config_path));
 
         // BEGIN DO STUFF
         std::thread::spawn(move || accept_connections(pdbs));
