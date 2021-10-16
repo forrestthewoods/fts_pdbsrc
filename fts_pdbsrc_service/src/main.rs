@@ -1,7 +1,5 @@
 use anyhow::*;
 
-mod job_system;
-
 #[cfg(windows)]
 fn main() -> anyhow::Result<()> {
     // Init logging
@@ -65,18 +63,9 @@ fn main() {
 #[cfg(windows)]
 mod fts_pdbsrc_service {
     use anyhow::*;
-    use crossbeam_deque::Worker;
     use serde::{Deserialize, Serialize};
-    use std::{
-        collections::HashMap,
-        ffi::OsString,
-        fs::File,
-        io::{Read, Write},
-        net::{TcpListener, TcpStream},
-        path::PathBuf,
-        sync::{mpsc, Arc, Mutex},
-        time::Duration,
-    };
+    use walkdir::WalkDir;
+    use std::{collections::HashMap, ffi::OsString, fs::File, io::{Read, Write}, net::{TcpListener, TcpStream}, path::PathBuf, sync::{mpsc, Arc, Mutex}, time::Duration};
     use uuid::Uuid;
 
     use windows_service::{
@@ -139,61 +128,60 @@ mod fts_pdbsrc_service {
         // The returned status handle should be used to report service status changes to the system.
         let status_handle = service_control_handler::register(SERVICE_NAME, event_handler)?;
 
-        // Initialize PDBs
-        let recursive_job = |path: PathBuf, worker: &Worker<_>| -> Option<(Uuid, PathBuf)> {
-            // Push dir contects
-            if path.is_dir() {
-                for entry in std::fs::read_dir(path).ok().unwrap() {
-                    let entry = entry.unwrap();
-                    let metadata = entry.metadata().unwrap();
-                    let entry_path = entry.path();
-                    if metadata.is_dir() || entry_path.extension().map(|ext| ext == "pdb").unwrap_or(false) {
-                        worker.push(entry_path);
-                    }
+        // Tell the system that service is initializing itself
+        log::info!("Setting service to running");
+        status_handle.set_service_status(ServiceStatus {
+            service_type: SERVICE_TYPE,
+            current_state: ServiceState::StartPending,
+            controls_accepted: ServiceControlAccept::STOP,
+            exit_code: ServiceExitCode::Win32(0),
+            checkpoint: 0,
+            wait_hint: Duration::default(),
+            process_id: None,
+        })?;
+
+        // Process a walkdir entry returning valid fts_pdbsrc pdbs
+        let process_entry = |entry: walkdir::DirEntry| -> anyhow::Result<(Uuid, PathBuf)> {
+            if entry.file_type().is_file() {
+                // Open PDB
+                let path = entry.path();
+                let pdbfile = File::open(path)?;
+                let mut pdb = pdb::PDB::open(pdbfile)?;
+                
+                // Get srcsrv stream
+                let srcsrv_stream = pdb.named_stream("srcsrv".as_bytes())?;
+                let srcsrv_str: &str = std::str::from_utf8(&srcsrv_stream)?;
+
+                // Verify srcsrv is compatible
+                if srcsrv_str.contains("VERCTRL=fts_pdbsrc") && srcsrv_str.contains("VERSION=1") {
+                    // Extract Uuid
+                    let key = "FTS_PDBSTR_UUID=";
+                    let uuid: Uuid = srcsrv_str
+                        .lines()
+                        .find(|line| line.starts_with(key))
+                        .and_then(|line| Uuid::parse_str(&line[key.len()..]).ok())
+                        .ok_or(anyhow!("Failed to parse Uuid.\n{}", srcsrv_str))?;
+
+                    // Return result
+                    let path = path.to_owned();
+                    log::info!("Found fts_pdbsrc pdb: [{:?}]", path);
+                    Ok((uuid, path.to_owned()))
+                } else {
+                    bail!("Incompatible srcsrv.\n{}", srcsrv_str);
                 }
             } else {
-                // Check if PDB is an fts_pdbsrc PDB
-                let result = || -> anyhow::Result<(Uuid, PathBuf)> {
-                    // Open PDB
-                    let pdbfile = File::open(&path)?;
-                    let mut pdb = pdb::PDB::open(pdbfile)?;
-                    
-                    // Get srcsrv stream
-                    let srcsrv_stream = pdb.named_stream("srcsrv".as_bytes())?;
-                    let srcsrv_str: &str = std::str::from_utf8(&srcsrv_stream)?;
-
-                    // Verify srcsrv is compatible
-                    if srcsrv_str.contains("VERCTRL=fts_pdbsrc") && srcsrv_str.contains("VERSION=1") {
-                        // Extract Uuid
-                        let key = "FTS_PDBSTR_UUID=";
-                        let uuid: Uuid = srcsrv_str
-                            .lines()
-                            .find(|line| line.starts_with(key))
-                            .and_then(|line| Uuid::parse_str(&line[key.len()..]).ok())
-                            .ok_or(anyhow!("Failed to parse Uuid.\n{}", srcsrv_str))?;
-
-                        // Return result
-                        Ok((uuid, path))
-                    } else {
-                        bail!("Incompatible srcsrv.\n{}", srcsrv_str);
-                    }
-                }()
-                .ok();
-
-                return result;
+                bail!("Not a file")
             }
-
-            None
         };
 
         // TODO: get path from config
         let initial_paths: Vec<PathBuf> = vec!["c:/temp".into()];
         log::info!("Searching initial paths for PDBs. [{:?}]", initial_paths);
         let start = std::time::Instant::now();
-        let pdbs =
-            crate::job_system::run_recursive_job(initial_paths, recursive_job, num_cpus::get_physical())
-                .into_iter()
-                .collect::<HashMap<Uuid, PathBuf>>();
+        let pdbs = initial_paths.iter().flat_map(|root| 
+            WalkDir::new(root).into_iter().filter_map(|entry| process_entry(entry.unwrap()).ok()))
+            .collect::<HashMap<Uuid, PathBuf>>();
+
         log::info!("Search time [{:?}]", std::time::Instant::now() - start);
         log::info!("Initial PDBs: [{:?}]", pdbs);
 

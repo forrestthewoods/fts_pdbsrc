@@ -19,4 +19,5 @@ structopt = "0.3.14"
 subprocess = "0.2.7"
 tempfile = "3.2.0"
 uuid = { version = "0.8.2", features = ["serde", "v4"] }
+walkdir = "2.3.2"
 windows-service = "0.4.0"
