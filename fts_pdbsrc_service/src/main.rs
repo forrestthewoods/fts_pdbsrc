@@ -64,9 +64,18 @@ fn main() {
 mod fts_pdbsrc_service {
     use anyhow::*;
     use serde::{Deserialize, Serialize};
-    use walkdir::WalkDir;
-    use std::{collections::HashMap, ffi::OsString, fs::File, io::{Read, Write}, net::{TcpListener, TcpStream}, path::PathBuf, sync::{mpsc, Arc, Mutex}, time::Duration};
+    use std::{
+        collections::HashMap,
+        ffi::OsString,
+        fs::File,
+        io::{Read, Write},
+        net::{TcpListener, TcpStream},
+        path::PathBuf,
+        sync::{mpsc, Arc, Mutex},
+        time::Duration,
+    };
     use uuid::Uuid;
+    use walkdir::WalkDir;
 
     use windows_service::{
         define_windows_service,
@@ -147,7 +156,7 @@ mod fts_pdbsrc_service {
                 let path = entry.path();
                 let pdbfile = File::open(path)?;
                 let mut pdb = pdb::PDB::open(pdbfile)?;
-                
+
                 // Get srcsrv stream
                 let srcsrv_stream = pdb.named_stream("srcsrv".as_bytes())?;
                 let srcsrv_str: &str = std::str::from_utf8(&srcsrv_stream)?;
@@ -164,7 +173,6 @@ mod fts_pdbsrc_service {
 
                     // Return result
                     let path = path.to_owned();
-                    log::info!("Found fts_pdbsrc pdb: [{:?}]", path);
                     Ok((uuid, path.to_owned()))
                 } else {
                     bail!("Incompatible srcsrv.\n{}", srcsrv_str);
@@ -178,8 +186,13 @@ mod fts_pdbsrc_service {
         let initial_paths: Vec<PathBuf> = vec!["c:/temp".into()];
         log::info!("Searching initial paths for PDBs. [{:?}]", initial_paths);
         let start = std::time::Instant::now();
-        let pdbs = initial_paths.iter().flat_map(|root| 
-            WalkDir::new(root).into_iter().filter_map(|entry| process_entry(entry.unwrap()).ok()))
+        let pdbs = initial_paths
+            .iter()
+            .flat_map(|root| {
+                WalkDir::new(root)
+                    .into_iter()
+                    .filter_map(|entry| process_entry(entry.unwrap()).ok())
+            })
             .collect::<HashMap<Uuid, PathBuf>>();
 
         log::info!("Search time [{:?}]", std::time::Instant::now() - start);
