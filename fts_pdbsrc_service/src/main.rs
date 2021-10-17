@@ -167,13 +167,12 @@ mod fts_pdbsrc_service {
             process_id: None,
         })?;
 
-
         // Determine config path
         let mut config_path = std::env::current_exe()?;
         config_path.set_file_name("fts_pdbsrc_service_config.json");
 
         // Read config
-        let config : Config = read_config(&config_path)?;
+        let config: Config = read_config(&config_path)?;
 
         // Update log level
         log::set_max_level(config.log_level);
@@ -189,31 +188,33 @@ mod fts_pdbsrc_service {
         // When config changes will clear and rewatch paths hotwatch
         let mut config_watcher = hotwatch::Hotwatch::new().expect("hotwatch failed to initialize!");
         let pdbs2 = pdbs.clone();
-        config_watcher.watch(&config_path, move |event: hotwatch::Event| {
-            let _ = || -> anyhow::Result<()> {
-                if let hotwatch::Event::Write(path) = event {
-                    log::info!("Config file [{:?}] changed. Re-parsing log.", path);
-                    
-                    // Read and parse config
-                    let new_config : Config = read_config(&path)?;
+        config_watcher
+            .watch(&config_path, move |event: hotwatch::Event| {
+                let _ = || -> anyhow::Result<()> {
+                    if let hotwatch::Event::Write(path) = event {
+                        log::info!("Config file [{:?}] changed. Re-parsing log.", path);
 
-                    // Update log level
-                    log::set_max_level(new_config.log_level);
+                        // Read and parse config
+                        let new_config: Config = read_config(&path)?;
 
-                    // Clear old watchers
-                    path_watchers.clear();
+                        // Update log level
+                        log::set_max_level(new_config.log_level);
 
-                    // Find new pdbs
-                    let new_pdbs = find_pdbs(&new_config.paths);
-                    *pdbs2.lock().unwrap() = new_pdbs;
+                        // Clear old watchers
+                        path_watchers.clear();
 
-                    // Recreate watchers
-                    path_watchers = watch_paths(&new_config.paths);
-                }
+                        // Find new pdbs
+                        let new_pdbs = find_pdbs(&new_config.paths);
+                        *pdbs2.lock().unwrap() = new_pdbs;
 
-                Ok(())
-            }();
-        }).expect(&format!("failed to watch [{:?}]!", &config_path));
+                        // Recreate watchers
+                        path_watchers = watch_paths(&new_config.paths);
+                    }
+
+                    Ok(())
+                }();
+            })
+            .expect(&format!("failed to watch [{:?}]!", &config_path));
 
         // BEGIN DO STUFF
         std::thread::spawn(move || accept_connections(pdbs));
@@ -273,7 +274,8 @@ mod fts_pdbsrc_service {
                         Message::FindPdb(uuid) => {
                             log::info!("Received request for PDB with Uuid: [{}]", uuid);
 
-                            let search_result : Option<PathBuf> = pdb_db.lock().unwrap().get(&uuid).map(|uuid| uuid.clone());
+                            let search_result: Option<PathBuf> =
+                                pdb_db.lock().unwrap().get(&uuid).map(|uuid| uuid.clone());
                             match search_result {
                                 Some(path) => {
                                     log::info!("Found path [{:?}] for uuid [{}]", path, uuid);
@@ -284,7 +286,7 @@ mod fts_pdbsrc_service {
                                     send_message(&mut stream, Message::FoundPdb((uuid, None)))?
                                 }
                             }
-                        },
+                        }
                         _ => return Err(anyhow!("Unexpected message: [{:?}]", msg)),
                     }
                 }
@@ -341,16 +343,19 @@ mod fts_pdbsrc_service {
     }
 
     fn watch_paths(paths: &[ConfigPath]) -> Vec<hotwatch::Hotwatch> {
-        paths.iter().filter_map(|entry| {
-            let mut hw = hotwatch::Hotwatch::new().expect("hotwatch failed to initialize!");
-            match hw.watch(&entry.path, |_event: hotwatch::Event| {}) {
-                Ok(()) => Some(hw),
-                Err(e) => {
-                    log::warn!("Failed to watch path: [{:?}]. Error: [{:?}]", &entry.path, e);
-                    None
+        paths
+            .iter()
+            .filter_map(|entry| {
+                let mut hw = hotwatch::Hotwatch::new().expect("hotwatch failed to initialize!");
+                match hw.watch(&entry.path, |_event: hotwatch::Event| {}) {
+                    Ok(()) => Some(hw),
+                    Err(e) => {
+                        log::warn!("Failed to watch path: [{:?}]. Error: [{:?}]", &entry.path, e);
+                        None
+                    }
                 }
-            }
-        }).collect()
+            })
+            .collect()
     }
 
     fn read_config(config_path: &Path) -> anyhow::Result<Config> {
@@ -366,18 +371,16 @@ mod fts_pdbsrc_service {
 
     fn process_walkdir_entry(entry: walkdir::DirEntry) -> anyhow::Result<(Uuid, PathBuf)> {
         log::debug!("Checking entry: [{:?}]", entry.path());
-        
+
         if entry.file_type().is_file() {
             // Verify file is a PDB
             let path = entry.path();
             match path.extension() {
-                Some(os_str) => {
-                    match os_str.to_str() {
-                        Some("pdb") => (),
-                        _ => bail!("Not a pdb")
-                    }
+                Some(os_str) => match os_str.to_str() {
+                    Some("pdb") => (),
+                    _ => bail!("Not a pdb"),
                 },
-                _ => bail!("No extension")
+                _ => bail!("No extension"),
             }
 
             // Open PDB
