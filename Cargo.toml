@@ -4,8 +4,11 @@ version = "0.1.0"
 edition = "2018"
 
 [dependencies]
+aes-gcm = "0.9.4"
 anyhow = "1.0"
+hex = "0.4.3"
 pdb = "0.7.0"
+rand = "0.8.4"
 rmp-serde = "0.15.5"
 serde = { version="1.0.130", features=["derive"]}
 structopt = "0.3.14"

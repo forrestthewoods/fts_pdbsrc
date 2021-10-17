@@ -1,5 +1,8 @@
+use aes_gcm::{Aes256Gcm, Key, Nonce};
+use aes_gcm::aead::{Aead, NewAead};
 use anyhow::*;
 use pdb::*;
+use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::{self, File};
@@ -32,10 +35,6 @@ enum Op {
 
     #[structopt(name = "extract_one", about = "Extract single source file from PDB")]
     ExtractOne(ExtractOneOp),
-
-    // TODO: delete?
-    #[structopt(name = "extract_all")]
-    ExtractAll(ExtractAllOp),
 
     #[structopt(name = "info", about = "Dump files and streams in PDB")]
     Info(InfoOp),
@@ -74,6 +73,9 @@ struct ExtractOneOp {
     #[structopt(short, long, help = "File to extract")]
     file: String,
 
+    #[structopt(short, long, help = "Nonce used to decode")]
+    nonce: String,
+
     #[structopt(short, long, help = "Output path, including filename, to create")]
     out: PathBuf,
 }
@@ -105,6 +107,11 @@ enum Message {
     FoundPdb((Uuid, Option<PathBuf>)),
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct Config {
+    pub keys : Vec<String>
+}
+
 // ----------------------------------------------------------------------------
 // Functions
 // ----------------------------------------------------------------------------
@@ -129,7 +136,6 @@ fn run(opts: Opts) -> anyhow::Result<()> {
     match opts.op {
         Op::Embed(op) => embed(op)?,
         Op::ExtractOne(op) => extract_one(op)?,
-        Op::ExtractAll(op) => extract_all(op)?,
         Op::Info(op) => info(op)?,
         Op::Watch(op) => watch(op)?,
         Op::InstallService(op) => install_service(op)?,
@@ -200,17 +206,49 @@ fn embed(op: EmbedOp) -> anyhow::Result<(), anyhow::Error> {
     // Close PDB so we can write to it
     drop(pdb);
 
+    // Generate a cypher for encrypting all files
+    let mut rng = rand::thread_rng();
+    let key_bytes = rng.gen::<[u8; 32]>();
+    let key = Key::from_slice(&key_bytes);
+    let cipher = Aes256Gcm::new(&key);
+
+    // Store per-file nonce
+    let mut nonces : HashMap<RawString, [u8; 12]> = Default::default();
+
     // Write source files into PDB
     for (raw_filepath, relpath, _) in &filepaths {
+        // Read file
+        let mut file = File::open(&*raw_filepath.to_string())?;
+        let mut plaintext = String::new();
+        file.read_to_string(&mut plaintext)?;
+
+        // Create per-file nonce
+        let nonce_bytes = rng.gen::<[u8; 12]>();
+        let nonce = Nonce::from_slice(&nonce_bytes); // 96-bits; unique per message
+
+        // Encrypt file contents
+        let encrypted_text = cipher.encrypt(nonce, plaintext.as_bytes()).expect("Failed to encrypt");
+        
+        // Write encrypted data to temp file
+        let mut encrypted_file = tempfile::NamedTempFile::new()?;
+        encrypted_file.write_all(&encrypted_text)?;
+        let (_, encrypted_file_path) = encrypted_file.keep()?;
+        
+        // Invoke pdbstr to write encrypted file into pdbstr
         let cmd = &[
             "pdbstr",                                                 // exe to run
             "-w",                                                     // write
             &format!("-p:{}", &op.pdb),                               // path to pdb
             &format!("-s:/fts_pdbsrc/{}", relpath.to_string_lossy()), // stream to write
-            &format!("-i:{}", raw_filepath),                          // file to write into stream
+            &format!("-i:{}", encrypted_file_path.to_string_lossy()), // file to write into stream
         ];
-
         run_command(cmd)?;
+
+        // Remove encrypted tempfile
+        std::fs::remove_file(encrypted_file_path)?;
+
+        // Retain nonce
+        nonces.insert(*raw_filepath, nonce_bytes);
     }
 
     // Create tempfile representing srcsrv.ini
@@ -249,12 +287,15 @@ fn embed(op: EmbedOp) -> anyhow::Result<(), anyhow::Error> {
     )?;
 
     for (raw_filepath, relpath, filename) in &filepaths {
+        let nonce = nonces.get(raw_filepath).unwrap();
+        let nonce_hex = hex::encode(nonce);
         writeln!(
             srcsrv,
-            "{}*{}*{}",
+            "{}*{}*{}*{}",
             raw_filepath,
             relpath.to_string_lossy(),
-            filename
+            filename,
+            nonce_hex
         )?;
     }
     writeln!(
@@ -277,6 +318,13 @@ fn embed(op: EmbedOp) -> anyhow::Result<(), anyhow::Error> {
 
     // Delete tempfile
     std::fs::remove_file(tempfile_path)?;
+
+    // Write key to console
+    println!("Files encrypted. The following key MUST be saved to decrypt. DO NOT LOSE THIS KEY.");
+    println!("BEGIN KEY------------------------------------------------");
+    let key_hex = hex::encode(&key_bytes);
+    println!("{}", key_hex);
+    println!("END KEY------------------------------------------------");
 
     Ok(())
 }
@@ -325,7 +373,33 @@ fn extract_one(op: ExtractOneOp) -> anyhow::Result<()> {
             let file_stream = pdb
                 .named_stream(stream_name.as_bytes())
                 .expect(&format!("Failed to find stream named [{}]", stream_name));
-            let file_stream_str: &str = std::str::from_utf8(&file_stream)?;
+            //let encrypted_file = file_stream.raw_str
+            let cipher_text = file_stream.as_slice();
+
+            // Decrypt file
+            let try_decrypt = |config: Config| -> anyhow::Result<Vec<u8>> {
+                for hexkey in config.keys {
+                    let try_key = |key_hex: &str| -> anyhow::Result<Vec<u8>> {
+                        let key_bytes = hex::decode(hexkey)?;
+                        let key = Key::from_slice(&key_bytes);
+                        let cipher = Aes256Gcm::new(&key);
+                        
+                        let nonce = Nonce::from_slice(&hex::decode(op.nonce)?);
+                        match cipher.decrypt(nonce, cipher_text) {
+                            Ok(plain_text) => Ok(plain_text),
+                            Err(_) => bail!("Failed to decrypt with key")
+                        }
+                    };
+
+                    if let Ok(plain_text) = try_key(&hexkey) {
+                        return Ok(plain_text)
+                    }
+                }
+                
+                bail!("Failed to decrypt with all keys")
+            };
+
+            let plain_text = try_decrypt(config)?;
 
             // Write to output file
             let out_dir = op
@@ -334,17 +408,13 @@ fn extract_one(op: ExtractOneOp) -> anyhow::Result<()> {
                 .ok_or(anyhow!("Failed to get directory for path [{:?}]", op.out))?;
             fs::create_dir_all(out_dir)?;
             let mut file = std::fs::File::create(op.out)?;
-            file.write_all(file_stream_str.as_bytes())?;
+            file.write_all(&plain_text)?;
         }
         Err(e) => {
             println!("Failed to connect: {}", e);
         }
     }
 
-    Ok(())
-}
-
-fn extract_all(_op: ExtractAllOp) -> anyhow::Result<()> {
     Ok(())
 }
 

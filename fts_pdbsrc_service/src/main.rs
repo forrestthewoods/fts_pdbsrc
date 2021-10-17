@@ -185,7 +185,7 @@ mod fts_pdbsrc_service {
         let mut path_watchers = watch_paths(&config.paths);
 
         // Watch config file
-        // When config changes will clear and rewatch paths hotwatch
+        // When config changes, clear old watchs/pdbs and refresh
         let mut config_watcher = hotwatch::Hotwatch::new().expect("hotwatch failed to initialize!");
         let pdbs2 = pdbs.clone();
         config_watcher
@@ -203,12 +203,15 @@ mod fts_pdbsrc_service {
                         // Clear old watchers
                         path_watchers.clear();
 
-                        // Find new pdbs
-                        let new_pdbs = find_pdbs(&new_config.paths);
-                        *pdbs2.lock().unwrap() = new_pdbs;
+                        // Find PDBs and watch paths under lock
+                        {
+                            // Find new pdbs
+                            let mut locked_pdbs = pdbs2.lock().unwrap();
+                            *locked_pdbs = find_pdbs(&new_config.paths);
 
-                        // Recreate watchers
-                        path_watchers = watch_paths(&new_config.paths);
+                            // Recreate watchers
+                            path_watchers = watch_paths(&new_config.paths);
+                        }
                     }
 
                     Ok(())
@@ -216,7 +219,7 @@ mod fts_pdbsrc_service {
             })
             .expect(&format!("failed to watch [{:?}]!", &config_path));
 
-        // BEGIN DO STUFF
+        // Listen to connections
         std::thread::spawn(move || accept_connections(pdbs));
 
         // Tell the system that service is running
