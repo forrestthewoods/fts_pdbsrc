@@ -77,7 +77,7 @@ mod fts_pdbsrc_service {
         fs::File,
         io::{Read, Write},
         net::{TcpListener, TcpStream},
-        path::PathBuf,
+        path::{Path, PathBuf},
         sync::{mpsc, Arc, Mutex},
         time::Duration,
     };
@@ -167,24 +167,19 @@ mod fts_pdbsrc_service {
             process_id: None,
         })?;
 
-        
 
-        // Load config
+        // Determine config path
         let mut config_path = std::env::current_exe()?;
         config_path.set_file_name("fts_pdbsrc_service_config.json");
-        log::info!("Loading config: [{:?}]", config_path);
 
-        let config_file = std::fs::File::open(&config_path)?;
-        log::info!("Parsing config");
-        let config: Config = serde_json::from_reader(&config_file)?;
-        log::info!("Loaded config: [{:?}]", config);
+        // Read config
+        let config : Config = read_config(&config_path)?;
 
-        // Initialize PDBs from config paths
-        log::info!("Searching initial paths for PDBs.");
-        let start = std::time::Instant::now();
+        // Update log level
+        log::set_max_level(config.log_level);
+
 
         // Process a walkdir entry returning valid fts_pdbsrc pdbs
-        log::set_max_level(config.log_level);
         let process_entry = |entry: walkdir::DirEntry| -> anyhow::Result<(Uuid, PathBuf)> {
             log::debug!("Checking entry: [{:?}]", entry.path());
             
@@ -230,32 +225,80 @@ mod fts_pdbsrc_service {
             }
         };
 
-        let pdbs = config
-            .paths
-            .iter()
-            .flat_map(|path_entry| {
-                log::debug!("Searching root entry: [{:?}]", &path_entry.path);
-                walkdir::WalkDir::new(&path_entry.path)
-                    .follow_links(path_entry.follow_symlinks)
-                    .into_iter()
-                    .filter_map(|dir_entry| process_entry(dir_entry.unwrap()).ok())
-            })
-            .collect::<HashMap<Uuid, PathBuf>>();
+        // Lambda to scan for pdbs
+        let find_pdbs = |paths: &[ConfigPath]| -> HashMap<Uuid, PathBuf> {
+            paths
+                .iter()
+                .flat_map(|path_entry| {
+                    log::debug!("Searching root entry: [{:?}]", &path_entry.path);
+                    walkdir::WalkDir::new(&path_entry.path)
+                        .follow_links(path_entry.follow_symlinks)
+                        .into_iter()
+                        .filter_map(|dir_entry| process_entry(dir_entry.unwrap()).ok())
+                })
+                .collect::<HashMap<Uuid, PathBuf>>()
+        };
+
+        // Create initial set of PDBs
+        log::info!("Searching initial paths for PDBs.");
+        let start = std::time::Instant::now();
+        let pdbs = find_pdbs(&config.paths);
 
         log::info!("Search time [{:?}]", std::time::Instant::now() - start);
         log::info!("Initial PDBs: [{:?}]", pdbs);
 
         let pdbs: Arc<Mutex<HashMap<Uuid, PathBuf>>> = Arc::new(Mutex::new(pdbs));
 
-        // TODO: add watch via notify crate
         // Watch config
         log::info!("Configuring watch events for config and config paths");
 
-        let mut hotwatch = hotwatch::Hotwatch::new().expect("hotwatch failed to initialize!");
-        hotwatch.watch(&config_path, |event: hotwatch::Event| {
-            if let hotwatch::Event::Write(path) = event {
-                println!("[{:?}] has changed.", path);
-            }
+        // Create a lambda that produces watchers for config paths
+        let watch_config_paths = |paths : &[ConfigPath]| -> Vec<hotwatch::Hotwatch> {
+            paths.iter().filter_map(|entry| {
+                let mut hw = hotwatch::Hotwatch::new().expect("hotwatch failed to initialize!");
+                match hw.watch(&entry.path, |_event: hotwatch::Event| {}) {
+                    Ok(()) => Some(hw),
+                    Err(e) => {
+                        log::warn!("Failed to watch path: [{:?}]. Error: [{:?}]", &entry.path, e);
+                        None
+                    }
+                }
+            }).collect()
+        };
+
+        // Create initial set of watchers
+        let mut path_watchers = watch_config_paths(&config.paths);
+
+        // Create a hotwatch for the config file
+        // When config changes will clear and rewatch paths hotwatch
+        let mut config_watcher = hotwatch::Hotwatch::new().expect("hotwatch failed to initialize!");
+        let pdbs2 = pdbs.clone();
+        config_watcher.watch(&config_path, move |event: hotwatch::Event| {
+            let _ = || -> anyhow::Result<()> {
+                if let hotwatch::Event::Write(path) = event {
+                    println!("Config file [{:?}] changed. Re-parsing log.", path);
+                    
+                    // Read and parse config
+                    let new_config : Config = read_config()?;
+
+                    // Update log level
+                    log::set_max_level(new_config.log_level);
+
+                    // Clear old watchers
+                    path_watchers.clear();
+
+                    // Clear pdbs
+                    pdbs2.lock().unwrap().clear();
+
+                    // Rescan for PDBs
+
+                    // Recreate watchers
+                    watch_config_paths(&new_config.paths);
+                    path_watchers = watch_config_paths(&new_config.paths);
+                }
+
+                Ok(())
+            }();
         }).expect(&format!("failed to watch [{:?}]!", &config_path));
 
         // BEGIN DO STUFF
@@ -373,5 +416,74 @@ mod fts_pdbsrc_service {
         let message: Message = rmp_serde::from_read_ref(&packet_buf)?;
 
         Ok(message)
+    }
+
+    fn watch_paths(paths: &[ConfigPath]) -> Vec<hotwatch::Hotwatch> {
+        paths.iter().filter_map(|entry| {
+            let mut hw = hotwatch::Hotwatch::new().expect("hotwatch failed to initialize!");
+            match hw.watch(&entry.path, |_event: hotwatch::Event| {}) {
+                Ok(()) => Some(hw),
+                Err(e) => {
+                    log::warn!("Failed to watch path: [{:?}]. Error: [{:?}]", &entry.path, e);
+                    None
+                }
+            }
+        }).collect()
+    }
+
+    fn read_config(config_path: &Path) -> anyhow::Result<Config> {
+        log::info!("Loading config file: [{:?}]", config_path);
+        let config_file = std::fs::File::open(&config_path)?;
+
+        log::info!("Parsing config");
+        let config: Config = serde_json::from_reader(&config_file)?;
+
+        log::info!("Successfully loaded config: [{:?}]", config);
+        Ok(config)
+    }
+
+    fn process_walkdir_entry(entry: walkdir::DirEntry) -> anyhow::Result<(Uuid, PathBuf)> {
+        log::debug!("Checking entry: [{:?}]", entry.path());
+        
+        if entry.file_type().is_file() {
+            // Verify file is a PDB
+            let path = entry.path();
+            match path.extension() {
+                Some(os_str) => {
+                    match os_str.to_str() {
+                        Some("pdb") => (),
+                        _ => bail!("Not a pdb")
+                    }
+                },
+                _ => bail!("No extension")
+            }
+
+            // Open PDB
+            let pdbfile = File::open(path)?;
+            let mut pdb = pdb::PDB::open(pdbfile)?;
+
+            // Get srcsrv stream
+            let srcsrv_stream = pdb.named_stream("srcsrv".as_bytes())?;
+            let srcsrv_str: &str = std::str::from_utf8(&srcsrv_stream)?;
+
+            // Verify srcsrv is compatible
+            if srcsrv_str.contains("VERCTRL=fts_pdbsrc") && srcsrv_str.contains("VERSION=1") {
+                // Extract Uuid
+                let key = "FTS_PDBSTR_UUID=";
+                let uuid: Uuid = srcsrv_str
+                    .lines()
+                    .find(|line| line.starts_with(key))
+                    .and_then(|line| Uuid::parse_str(&line[key.len()..]).ok())
+                    .ok_or(anyhow!("Failed to parse Uuid.\n{}", srcsrv_str))?;
+
+                // Return result
+                let path = path.to_owned();
+                Ok((uuid, path.to_owned()))
+            } else {
+                bail!("Incompatible srcsrv.\n{}", srcsrv_str);
+            }
+        } else {
+            bail!("Not a file")
+        }
     }
 }
