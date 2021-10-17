@@ -11,6 +11,7 @@ pdb = "0.7.0"
 rand = "0.8.4"
 rmp-serde = "0.15.5"
 serde = { version="1.0.130", features=["derive"]}
+serde_json = "1.0"
 structopt = "0.3.14"
 subprocess = "0.2.7"
 tempfile = "3.2.0"

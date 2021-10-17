@@ -350,8 +350,14 @@ mod fts_pdbsrc_service {
             .iter()
             .filter_map(|entry| {
                 let mut hw = hotwatch::Hotwatch::new().expect("hotwatch failed to initialize!");
-                match hw.watch(&entry.path, |_event: hotwatch::Event| {}) {
-                    Ok(()) => Some(hw),
+                // $$$FTS_TODO: Also pay attention to newly created PDBs
+                match hw.watch(&entry.path, |_event: hotwatch::Event| {
+                    // $$$FTS_TODO: Actually do something here
+                }) {
+                    Ok(()) => {
+                        log::info!("Created watch for: [{:?}]", entry.path);
+                        Some(hw)
+                    }
                     Err(e) => {
                         log::warn!("Failed to watch path: [{:?}]. Error: [{:?}]", &entry.path, e);
                         None

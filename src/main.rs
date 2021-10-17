@@ -115,12 +115,15 @@ struct Config {
 // ----------------------------------------------------------------------------
 // Functions
 // ----------------------------------------------------------------------------
-fn main() {
+fn main() -> anyhow::Result<()> {
     // Parse args
     let opts: Opts = Opts::from_args();
 
+    // Read config
+    let config = read_config()?;
+
     // Run program
-    let exit_code = match run(opts) {
+    let exit_code = match run(opts, config) {
         Ok(_) => 0,
         Err(err) => {
             eprint!("Error: {:?}", err);
@@ -132,10 +135,18 @@ fn main() {
     std::process::exit(exit_code);
 }
 
-fn run(opts: Opts) -> anyhow::Result<()> {
+fn read_config() -> anyhow::Result<Config> {
+    let mut config_path = std::env::current_exe()?;
+    config_path.set_file_name("fts_pdbsrc_config.json");
+    let config_file = std::fs::File::open(&config_path)?;
+    let config: Config = serde_json::from_reader(&config_file)?;
+    Ok(config)
+}
+
+fn run(opts: Opts, config: Config) -> anyhow::Result<()> {
     match opts.op {
         Op::Embed(op) => embed(op)?,
-        Op::ExtractOne(op) => extract_one(op)?,
+        Op::ExtractOne(op) => extract_one(op, config)?,
         Op::Info(op) => info(op)?,
         Op::Watch(op) => watch(op)?,
         Op::InstallService(op) => install_service(op)?,
@@ -213,7 +224,7 @@ fn embed(op: EmbedOp) -> anyhow::Result<(), anyhow::Error> {
     let cipher = Aes256Gcm::new(&key);
 
     // Store per-file nonce
-    let mut nonces : HashMap<RawString, [u8; 12]> = Default::default();
+    let mut nonces : HashMap<RawString, String> = Default::default();
 
     // Write source files into PDB
     for (raw_filepath, relpath, _) in &filepaths {
@@ -248,7 +259,7 @@ fn embed(op: EmbedOp) -> anyhow::Result<(), anyhow::Error> {
         std::fs::remove_file(encrypted_file_path)?;
 
         // Retain nonce
-        nonces.insert(*raw_filepath, nonce_bytes);
+        nonces.insert(*raw_filepath, hex::encode(nonce_bytes));
     }
 
     // Create tempfile representing srcsrv.ini
@@ -279,7 +290,7 @@ fn embed(op: EmbedOp) -> anyhow::Result<(), anyhow::Error> {
     )?;
     writeln!(
         srcsrv,
-        "SRCSRVCMD=fts_pdbsrc extract_one --pdb-uuid %FTS_PDBSTR_UUID% --file %var2% --out %SRCSRVTRG%",
+        "SRCSRVCMD=fts_pdbsrc extract_one --pdb-uuid %FTS_PDBSTR_UUID% --file %var2% --out %SRCSRVTRG% --nonce %var4%",
     )?;
     writeln!(
         srcsrv,
@@ -287,15 +298,13 @@ fn embed(op: EmbedOp) -> anyhow::Result<(), anyhow::Error> {
     )?;
 
     for (raw_filepath, relpath, filename) in &filepaths {
-        let nonce = nonces.get(raw_filepath).unwrap();
-        let nonce_hex = hex::encode(nonce);
         writeln!(
             srcsrv,
             "{}*{}*{}*{}",
             raw_filepath,
             relpath.to_string_lossy(),
             filename,
-            nonce_hex
+            nonces.get(raw_filepath).unwrap()
         )?;
     }
     writeln!(
@@ -329,7 +338,7 @@ fn embed(op: EmbedOp) -> anyhow::Result<(), anyhow::Error> {
     Ok(())
 }
 
-fn extract_one(op: ExtractOneOp) -> anyhow::Result<()> {
+fn extract_one(op: ExtractOneOp, config: Config) -> anyhow::Result<()> {
     // Temp: span watch
     std::thread::spawn(|| watch(WatchOp {}));
 
@@ -373,25 +382,25 @@ fn extract_one(op: ExtractOneOp) -> anyhow::Result<()> {
             let file_stream = pdb
                 .named_stream(stream_name.as_bytes())
                 .expect(&format!("Failed to find stream named [{}]", stream_name));
-            //let encrypted_file = file_stream.raw_str
             let cipher_text = file_stream.as_slice();
 
             // Decrypt file
             let try_decrypt = |config: Config| -> anyhow::Result<Vec<u8>> {
                 for hexkey in config.keys {
-                    let try_key = |key_hex: &str| -> anyhow::Result<Vec<u8>> {
-                        let key_bytes = hex::decode(hexkey)?;
+                    let try_key = |key_hex: &str, nonce_str: &str| -> anyhow::Result<Vec<u8>> {
+                        let key_bytes = hex::decode(key_hex)?;
                         let key = Key::from_slice(&key_bytes);
                         let cipher = Aes256Gcm::new(&key);
                         
-                        let nonce = Nonce::from_slice(&hex::decode(op.nonce)?);
+                        let nonce_bytes = hex::decode(nonce_str)?;
+                        let nonce = Nonce::from_slice(&nonce_bytes);
                         match cipher.decrypt(nonce, cipher_text) {
                             Ok(plain_text) => Ok(plain_text),
                             Err(_) => bail!("Failed to decrypt with key")
                         }
                     };
 
-                    if let Ok(plain_text) = try_key(&hexkey) {
+                    if let Ok(plain_text) = try_key(&hexkey, &op.nonce) {
                         return Ok(plain_text)
                     }
                 }
