@@ -178,108 +178,24 @@ mod fts_pdbsrc_service {
         // Update log level
         log::set_max_level(config.log_level);
 
-
-        // Process a walkdir entry returning valid fts_pdbsrc pdbs
-        let process_entry = |entry: walkdir::DirEntry| -> anyhow::Result<(Uuid, PathBuf)> {
-            log::debug!("Checking entry: [{:?}]", entry.path());
-            
-            if entry.file_type().is_file() {
-                // Verify file is a PDB
-                let path = entry.path();
-                match path.extension() {
-                    Some(os_str) => {
-                        match os_str.to_str() {
-                            Some("pdb") => (),
-                            _ => bail!("Not a pdb")
-                        }
-                    },
-                    _ => bail!("No extension")
-                }
-
-                // Open PDB
-                let pdbfile = File::open(path)?;
-                let mut pdb = pdb::PDB::open(pdbfile)?;
-
-                // Get srcsrv stream
-                let srcsrv_stream = pdb.named_stream("srcsrv".as_bytes())?;
-                let srcsrv_str: &str = std::str::from_utf8(&srcsrv_stream)?;
-
-                // Verify srcsrv is compatible
-                if srcsrv_str.contains("VERCTRL=fts_pdbsrc") && srcsrv_str.contains("VERSION=1") {
-                    // Extract Uuid
-                    let key = "FTS_PDBSTR_UUID=";
-                    let uuid: Uuid = srcsrv_str
-                        .lines()
-                        .find(|line| line.starts_with(key))
-                        .and_then(|line| Uuid::parse_str(&line[key.len()..]).ok())
-                        .ok_or(anyhow!("Failed to parse Uuid.\n{}", srcsrv_str))?;
-
-                    // Return result
-                    let path = path.to_owned();
-                    Ok((uuid, path.to_owned()))
-                } else {
-                    bail!("Incompatible srcsrv.\n{}", srcsrv_str);
-                }
-            } else {
-                bail!("Not a file")
-            }
-        };
-
-        // Lambda to scan for pdbs
-        let find_pdbs = |paths: &[ConfigPath]| -> HashMap<Uuid, PathBuf> {
-            paths
-                .iter()
-                .flat_map(|path_entry| {
-                    log::debug!("Searching root entry: [{:?}]", &path_entry.path);
-                    walkdir::WalkDir::new(&path_entry.path)
-                        .follow_links(path_entry.follow_symlinks)
-                        .into_iter()
-                        .filter_map(|dir_entry| process_entry(dir_entry.unwrap()).ok())
-                })
-                .collect::<HashMap<Uuid, PathBuf>>()
-        };
-
         // Create initial set of PDBs
-        log::info!("Searching initial paths for PDBs.");
-        let start = std::time::Instant::now();
         let pdbs = find_pdbs(&config.paths);
-
-        log::info!("Search time [{:?}]", std::time::Instant::now() - start);
-        log::info!("Initial PDBs: [{:?}]", pdbs);
-
         let pdbs: Arc<Mutex<HashMap<Uuid, PathBuf>>> = Arc::new(Mutex::new(pdbs));
 
-        // Watch config
-        log::info!("Configuring watch events for config and config paths");
+        // Watch each config filepath for changes
+        let mut path_watchers = watch_paths(&config.paths);
 
-        // Create a lambda that produces watchers for config paths
-        let watch_config_paths = |paths : &[ConfigPath]| -> Vec<hotwatch::Hotwatch> {
-            paths.iter().filter_map(|entry| {
-                let mut hw = hotwatch::Hotwatch::new().expect("hotwatch failed to initialize!");
-                match hw.watch(&entry.path, |_event: hotwatch::Event| {}) {
-                    Ok(()) => Some(hw),
-                    Err(e) => {
-                        log::warn!("Failed to watch path: [{:?}]. Error: [{:?}]", &entry.path, e);
-                        None
-                    }
-                }
-            }).collect()
-        };
-
-        // Create initial set of watchers
-        let mut path_watchers = watch_config_paths(&config.paths);
-
-        // Create a hotwatch for the config file
+        // Watch config file
         // When config changes will clear and rewatch paths hotwatch
         let mut config_watcher = hotwatch::Hotwatch::new().expect("hotwatch failed to initialize!");
         let pdbs2 = pdbs.clone();
         config_watcher.watch(&config_path, move |event: hotwatch::Event| {
             let _ = || -> anyhow::Result<()> {
                 if let hotwatch::Event::Write(path) = event {
-                    println!("Config file [{:?}] changed. Re-parsing log.", path);
+                    log::info!("Config file [{:?}] changed. Re-parsing log.", path);
                     
                     // Read and parse config
-                    let new_config : Config = read_config()?;
+                    let new_config : Config = read_config(&path)?;
 
                     // Update log level
                     log::set_max_level(new_config.log_level);
@@ -287,14 +203,12 @@ mod fts_pdbsrc_service {
                     // Clear old watchers
                     path_watchers.clear();
 
-                    // Clear pdbs
-                    pdbs2.lock().unwrap().clear();
-
-                    // Rescan for PDBs
+                    // Find new pdbs
+                    let new_pdbs = find_pdbs(&new_config.paths);
+                    *pdbs2.lock().unwrap() = new_pdbs;
 
                     // Recreate watchers
-                    watch_config_paths(&new_config.paths);
-                    path_watchers = watch_config_paths(&new_config.paths);
+                    path_watchers = watch_paths(&new_config.paths);
                 }
 
                 Ok(())
@@ -356,12 +270,20 @@ mod fts_pdbsrc_service {
                 loop {
                     let msg = read_message(&mut stream)?;
                     match msg {
-                        Message::FindPdb(uuid) => match pdb_db.lock().unwrap().get(&uuid) {
-                            Some(path) => {
-                                log::trace!("Found path [{:?}] for uuid [{}]", path, uuid);
-                                send_message(&mut stream, Message::FoundPdb((uuid, Some(path.clone()))))?
+                        Message::FindPdb(uuid) => {
+                            log::info!("Received request for PDB with Uuid: [{}]", uuid);
+
+                            let search_result : Option<PathBuf> = pdb_db.lock().unwrap().get(&uuid).map(|uuid| uuid.clone());
+                            match search_result {
+                                Some(path) => {
+                                    log::info!("Found path [{:?}] for uuid [{}]", path, uuid);
+                                    send_message(&mut stream, Message::FoundPdb((uuid, Some(path.clone()))))?
+                                }
+                                None => {
+                                    log::info!("Failed to find match for uuid [{}]", uuid);
+                                    send_message(&mut stream, Message::FoundPdb((uuid, None)))?
+                                }
                             }
-                            None => send_message(&mut stream, Message::FoundPdb((uuid, None)))?,
                         },
                         _ => return Err(anyhow!("Unexpected message: [{:?}]", msg)),
                     }
@@ -485,5 +407,26 @@ mod fts_pdbsrc_service {
         } else {
             bail!("Not a file")
         }
+    }
+
+    fn find_pdbs(paths: &[ConfigPath]) -> HashMap<Uuid, PathBuf> {
+        log::info!("Searching for PDBs:");
+        let start = std::time::Instant::now();
+
+        let pdbs = paths
+            .iter()
+            .flat_map(|path_entry| {
+                log::info!("Searching root entry: [{:?}]", &path_entry.path);
+                walkdir::WalkDir::new(&path_entry.path)
+                    .follow_links(path_entry.follow_symlinks)
+                    .into_iter()
+                    .filter_map(|dir_entry| process_walkdir_entry(dir_entry.unwrap()).ok())
+            })
+            .collect::<HashMap<Uuid, PathBuf>>();
+
+        log::info!("Search time [{:?}]", std::time::Instant::now() - start);
+        log::info!("Found PDBs: [{:?}]", pdbs);
+
+        pdbs
     }
 }
