@@ -10,7 +10,7 @@ crossbeam-deque = "0.7.3"
 crossbeam-utils = "0.7.2"
 dirs = "3.0.2"
 hotwatch = "0.4.6"
-log = "0.4.14"
+log = { "version" = "0.4.14", features = ["serde"] }
 num_cpus = "1.13.0"
 pdb = "0.7.0"
 rmp-serde = "0.15.5"

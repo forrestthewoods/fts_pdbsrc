@@ -98,7 +98,7 @@ mod fts_pdbsrc_service {
     #[derive(Clone, Debug, Serialize, Deserialize)]
     struct Config {
         pub paths: Vec<ConfigPath>,
-        pub verbose: bool
+        pub log_level: simplelog::LevelFilter,
     }
 
     #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -184,11 +184,9 @@ mod fts_pdbsrc_service {
         let start = std::time::Instant::now();
 
         // Process a walkdir entry returning valid fts_pdbsrc pdbs
-        let verbose = config.verbose;
+        log::set_max_level(config.log_level);
         let process_entry = |entry: walkdir::DirEntry| -> anyhow::Result<(Uuid, PathBuf)> {
-            if verbose {
-                log::debug!("Checking entry: [{:?}]", entry.path());
-            }
+            log::debug!("Checking entry: [{:?}]", entry.path());
             
             if entry.file_type().is_file() {
                 // Verify file is a PDB
