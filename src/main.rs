@@ -9,6 +9,7 @@ use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use structopt::StructOpt;
 use subprocess::*;
 use uuid::Uuid;
@@ -56,6 +57,35 @@ enum Op {
     UninstallService(UninstallServiceOp),
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+enum EncryptMode {
+    Plaintext,
+    EncryptWithRngKey,
+    EncryptWithKey(String),
+}
+
+impl std::str::FromStr for EncryptMode {
+    type Err = anyhow::Error;
+    fn from_str(encrypt_mode: &str) -> anyhow::Result<Self, Self::Err> {
+        match serde_json::from_str(encrypt_mode) {
+            Ok(encrypt_mode) => Ok(encrypt_mode),
+            Err(e) => anyhow::Result::Err(e).context("Failed to parse EncryptWithKey")
+        }
+        /*
+        match encrypt_mode {
+            "plaintext" => Ok(EncryptMode::Plaintext),
+            "rngkey" => Ok(EncryptMode::EncryptWithRngKey),
+            maybe_key => {
+                let key_bytes = hex::decode(maybe_key)?;
+                let key = Key::from_slice(&key_bytes);
+                let cipher = Aes256Gcm::new(&key);
+                Ok(EncryptMode::EncryptWithKey(cipher))
+            }
+        }
+        */
+    }
+}
+
 #[derive(Debug, StructOpt)]
 struct EmbedOp {
     #[structopt(short, long, help = "Target PDB for specified operation")]
@@ -63,6 +93,9 @@ struct EmbedOp {
 
     #[structopt(short, long, parse(from_os_str), help = "Root for files to embed")]
     roots: Vec<PathBuf>,
+
+    #[structopt(short, long, help = "Specify encryption mode")]
+    encrypt_mode: EncryptMode,
 }
 
 #[derive(Debug, StructOpt)]
@@ -73,6 +106,7 @@ struct ExtractOneOp {
     #[structopt(short, long, help = "File to extract")]
     file: String,
 
+    // $$$FTS_TODO: Make optional
     #[structopt(short, long, help = "Nonce used to decode")]
     nonce: String,
 
@@ -109,7 +143,8 @@ enum Message {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct Config {
-    pub keys : Vec<String>
+    pub decode_keys : Vec<String>,
+    pub encrypt_mode : EncryptMode,
 }
 
 // ----------------------------------------------------------------------------
@@ -217,12 +252,27 @@ fn embed(op: EmbedOp) -> anyhow::Result<(), anyhow::Error> {
     // Close PDB so we can write to it
     drop(pdb);
 
-    // Generate a cypher for encrypting all files
+    // RNG for key / nonce generation (if needed)
     let mut rng = rand::thread_rng();
-    let key_bytes = rng.gen::<[u8; 32]>();
-    let key = Key::from_slice(&key_bytes);
-    let cipher = Aes256Gcm::new(&key);
 
+    // Create cipher for encryption if specified by mode
+    let (cipher, rng_key) : (Option<Aes256Gcm>, Option<[u8; 32]>) = match op.encrypt_mode {
+        EncryptMode::Plaintext => (None, None),
+        EncryptMode::EncryptWithRngKey => {
+            // Create cipher with randomly generated key
+            let mut rng = rand::thread_rng();
+            let key_rng_bytes = rng.gen::<[u8; 32]>();
+            let cipher = Aes256Gcm::new(&Key::from_slice(&key_rng_bytes));
+            (Some(cipher), Some(key_rng_bytes))
+        },
+        EncryptMode::EncryptWithKey(key_hex) => {
+            // Create cipher from provided key 
+            let key = hex::decode(key_hex)?;
+            let cipher = Aes256Gcm::new(&Key::from_slice(&key));
+            (Some(cipher), None)
+        }
+    };
+    
     // Store per-file nonce
     let mut nonces : HashMap<RawString, String> = Default::default();
 
@@ -233,33 +283,47 @@ fn embed(op: EmbedOp) -> anyhow::Result<(), anyhow::Error> {
         let mut plaintext = String::new();
         file.read_to_string(&mut plaintext)?;
 
-        // Create per-file nonce
-        let nonce_bytes = rng.gen::<[u8; 12]>();
-        let nonce = Nonce::from_slice(&nonce_bytes); // 96-bits; unique per message
 
-        // Encrypt file contents
-        let encrypted_text = cipher.encrypt(nonce, plaintext.as_bytes()).expect("Failed to encrypt");
+        // Optionally encrypt file contents
+        let (stream_filepath, delete_stream_file) : (PathBuf, bool) = match &cipher {
+            None => {
+                (PathBuf::from_str(&*raw_filepath.to_string())?, false)
+            }
+            Some(cipher) => {
+                // Create per-file nonce; 96-bits, unique per message
+                let nonce_bytes = rng.gen::<[u8; 12]>();
+                let nonce = Nonce::from_slice(&nonce_bytes); // 96-bits; unique per message
+
+                // Encrypt text
+                let encrypted_text = cipher.encrypt(nonce, plaintext.as_bytes()).expect("Failed to encrypt");
         
-        // Write encrypted data to temp file
-        let mut encrypted_file = tempfile::NamedTempFile::new()?;
-        encrypted_file.write_all(&encrypted_text)?;
-        let (_, encrypted_file_path) = encrypted_file.keep()?;
-        
+                // Write encrypted data to temp file
+                let mut encrypted_file = tempfile::NamedTempFile::new()?;
+                encrypted_file.write_all(&encrypted_text)?;
+                let (_, encrypted_filepath) = encrypted_file.keep()?;
+
+                // Retain nonce
+                nonces.insert(*raw_filepath, hex::encode(nonce_bytes));
+
+                // Return path to tempfile with encrypted content
+                (encrypted_filepath, true)
+            }
+        };
+
         // Invoke pdbstr to write encrypted file into pdbstr
         let cmd = &[
             "pdbstr",                                                 // exe to run
             "-w",                                                     // write
             &format!("-p:{}", &op.pdb),                               // path to pdb
             &format!("-s:/fts_pdbsrc/{}", relpath.to_string_lossy()), // stream to write
-            &format!("-i:{}", encrypted_file_path.to_string_lossy()), // file to write into stream
+            &format!("-i:{}", stream_filepath.to_string_lossy()),     // file to write into stream
         ];
         run_command(cmd)?;
 
-        // Remove encrypted tempfile
-        std::fs::remove_file(encrypted_file_path)?;
-
-        // Retain nonce
-        nonces.insert(*raw_filepath, hex::encode(nonce_bytes));
+        // Remove encrypted tempfile if one was created
+        if delete_stream_file {
+            std::fs::remove_file(stream_filepath)?;
+        }
     }
 
     // Create tempfile representing srcsrv.ini
@@ -328,12 +392,14 @@ fn embed(op: EmbedOp) -> anyhow::Result<(), anyhow::Error> {
     // Delete tempfile
     std::fs::remove_file(tempfile_path)?;
 
-    // Write key to console
-    println!("Files encrypted. The following key MUST be saved to decrypt. DO NOT LOSE THIS KEY.");
-    println!("BEGIN KEY------------------------------------------------");
-    let key_hex = hex::encode(&key_bytes);
-    println!("{}", key_hex);
-    println!("END KEY------------------------------------------------");
+    // Write key to console IFF it was randomly generated
+    if let Some(rng_key) = rng_key {
+        println!("Files encrypted. The following key MUST be saved to decrypt. DO NOT LOSE THIS KEY.");
+        println!("BEGIN KEY------------------------------------------------");
+        let key_hex = hex::encode(&rng_key);
+        println!("{}", key_hex);
+        println!("END KEY------------------------------------------------");
+    }
 
     Ok(())
 }
@@ -386,7 +452,7 @@ fn extract_one(op: ExtractOneOp, config: Config) -> anyhow::Result<()> {
 
             // Decrypt file
             let try_decrypt = |config: Config| -> anyhow::Result<Vec<u8>> {
-                for hexkey in config.keys {
+                for hexkey in config.decode_keys {
                     let try_key = |key_hex: &str, nonce_str: &str| -> anyhow::Result<Vec<u8>> {
                         let key_bytes = hex::decode(key_hex)?;
                         let key = Key::from_slice(&key_bytes);
