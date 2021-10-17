@@ -6,11 +6,7 @@ fn main() -> anyhow::Result<()> {
     init_logging()?;
 
     std::panic::set_hook(Box::new(|panic_info| {
-        if let Some(s) = panic_info.payload().downcast_ref::<&str>() {
-            log::error!("panic occurred: {:?}", s);
-        } else {
-            log::error!("panic occurred");
-        }
+        log::error!("panic occurred: [{:?}]", panic_info);
     }));
 
     // Run program (convert enum to anyhow::error)
@@ -102,6 +98,7 @@ mod fts_pdbsrc_service {
     #[derive(Clone, Debug, Serialize, Deserialize)]
     struct Config {
         pub paths: Vec<ConfigPath>,
+        pub verbose: bool
     }
 
     #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -128,8 +125,8 @@ mod fts_pdbsrc_service {
     // parameters. There is no stdout or stderr at this point so make sure to configure the log
     // output to file if needed.
     pub fn my_service_main(_arguments: Vec<OsString>) {
-        if let Err(_e) = run_service() {
-            // Handle the error, by logging or something.
+        if let Err(e) = run_service() {
+            log::error!("Unexpected error: [{:?}]", e);
         }
     }
 
@@ -170,11 +167,43 @@ mod fts_pdbsrc_service {
             process_id: None,
         })?;
 
+        
+
+        // Load config
+        let mut config_path = std::env::current_exe()?;
+        config_path.set_file_name("fts_pdbsrc_service_config.json");
+        log::info!("Loading config: [{:?}]", config_path);
+
+        let config_file = std::fs::File::open(&config_path)?;
+        log::info!("Parsing config");
+        let config: Config = serde_json::from_reader(&config_file)?;
+        log::info!("Loaded config: [{:?}]", config);
+
+        // Initialize PDBs from config paths
+        log::info!("Searching initial paths for PDBs.");
+        let start = std::time::Instant::now();
+
         // Process a walkdir entry returning valid fts_pdbsrc pdbs
+        let verbose = config.verbose;
         let process_entry = |entry: walkdir::DirEntry| -> anyhow::Result<(Uuid, PathBuf)> {
+            if verbose {
+                log::debug!("Checking entry: [{:?}]", entry.path());
+            }
+            
             if entry.file_type().is_file() {
-                // Open PDB
+                // Verify file is a PDB
                 let path = entry.path();
+                match path.extension() {
+                    Some(os_str) => {
+                        match os_str.to_str() {
+                            Some("pdb") => (),
+                            _ => bail!("Not a pdb")
+                        }
+                    },
+                    _ => bail!("No extension")
+                }
+
+                // Open PDB
                 let pdbfile = File::open(path)?;
                 let mut pdb = pdb::PDB::open(pdbfile)?;
 
@@ -203,24 +232,11 @@ mod fts_pdbsrc_service {
             }
         };
 
-        // Load config
-        let mut config_path = std::env::current_exe()?;
-        config_path.set_file_name("fts_pdbsrc_service_config.json");
-        log::info!("Loading config: [{:?}]", config_path);
-
-        let config_file = std::fs::File::open(&config_path)?;
-        log::info!("Parsing config");
-        let config: Config = serde_json::from_reader(&config_file)?;
-        log::info!("Loaded config: [{:?}]", config);
-
-        // Initialize PDBs from config paths
-        log::info!("Searching initial paths for PDBs.");
-        let start = std::time::Instant::now();
-
         let pdbs = config
             .paths
             .iter()
             .flat_map(|path_entry| {
+                log::debug!("Searching root entry: [{:?}]", &path_entry.path);
                 walkdir::WalkDir::new(&path_entry.path)
                     .follow_links(path_entry.follow_symlinks)
                     .into_iter()
