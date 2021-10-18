@@ -1,5 +1,5 @@
-use aes_gcm::{Aes256Gcm, Key, Nonce};
 use aes_gcm::aead::{Aead, NewAead};
+use aes_gcm::{Aes256Gcm, Key, Nonce};
 use anyhow::*;
 use pdb::*;
 use rand::Rng;
@@ -64,12 +64,14 @@ enum EncryptMode {
     EncryptWithKey(String),
 }
 
+/*
 impl std::str::FromStr for EncryptMode {
     type Err = anyhow::Error;
     fn from_str(encrypt_mode: &str) -> anyhow::Result<Self, Self::Err> {
+        println!("Attempting to parse: [{}]", encrypt_mode);
         match serde_json::from_str(encrypt_mode) {
             Ok(encrypt_mode) => Ok(encrypt_mode),
-            Err(e) => anyhow::Result::Err(e).context("Failed to parse EncryptWithKey")
+            Err(e) => anyhow::Result::Err(e).context("Failed to parse EncryptMode")
         }
         /*
         match encrypt_mode {
@@ -85,6 +87,7 @@ impl std::str::FromStr for EncryptMode {
         */
     }
 }
+*/
 
 #[derive(Debug, StructOpt)]
 struct EmbedOp {
@@ -94,8 +97,13 @@ struct EmbedOp {
     #[structopt(short, long, parse(from_os_str), help = "Root for files to embed")]
     roots: Vec<PathBuf>,
 
-    #[structopt(short, long, help = "Specify encryption mode")]
-    encrypt_mode: EncryptMode,
+    #[structopt(short, long, help = "Enable encryption")]
+    encrypt: bool,
+
+    #[structopt(short = "k", long, help = "(Optional) 128-bit key to use for encryption")]
+    encrypt_key: Option<String>,
+    //#[structopt(short, long, help = "Specify encryption mode")]
+    //encrypt_mode: EncryptMode,
 }
 
 #[derive(Debug, StructOpt)]
@@ -106,9 +114,8 @@ struct ExtractOneOp {
     #[structopt(short, long, help = "File to extract")]
     file: String,
 
-    // $$$FTS_TODO: Make optional
     #[structopt(short, long, help = "Nonce used to decode")]
-    nonce: String,
+    nonce: Option<String>,
 
     #[structopt(short, long, help = "Output path, including filename, to create")]
     out: PathBuf,
@@ -143,8 +150,7 @@ enum Message {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct Config {
-    pub decode_keys : Vec<String>,
-    pub encrypt_mode : EncryptMode,
+    pub decode_keys: Vec<String>,
 }
 
 // ----------------------------------------------------------------------------
@@ -249,14 +255,34 @@ fn embed(op: EmbedOp) -> anyhow::Result<(), anyhow::Error> {
         }
     }
 
+    // Make sure we found at least some files
+    if filepaths.is_empty() {
+        bail!("Failed to find any files");
+    }
+
+    // Print files that were found and will be embedded
+    println!("Found following files:");
+    filepaths.iter().for_each(|(_, filepath, _)| {
+        println!("  {}", filepath.to_string_lossy());
+    });
+
     // Close PDB so we can write to it
     drop(pdb);
 
     // RNG for key / nonce generation (if needed)
     let mut rng = rand::thread_rng();
 
+    let encrypt_mode = if !op.encrypt {
+        EncryptMode::Plaintext
+    } else {
+        match &op.encrypt_key {
+            Some(key) => EncryptMode::EncryptWithKey(key.clone()),
+            None => EncryptMode::EncryptWithRngKey,
+        }
+    };
+
     // Create cipher for encryption if specified by mode
-    let (cipher, rng_key) : (Option<Aes256Gcm>, Option<[u8; 32]>) = match op.encrypt_mode {
+    let (cipher, rng_key): (Option<Aes256Gcm>, Option<[u8; 32]>) = match encrypt_mode {
         EncryptMode::Plaintext => (None, None),
         EncryptMode::EncryptWithRngKey => {
             // Create cipher with randomly generated key
@@ -264,17 +290,17 @@ fn embed(op: EmbedOp) -> anyhow::Result<(), anyhow::Error> {
             let key_rng_bytes = rng.gen::<[u8; 32]>();
             let cipher = Aes256Gcm::new(&Key::from_slice(&key_rng_bytes));
             (Some(cipher), Some(key_rng_bytes))
-        },
+        }
         EncryptMode::EncryptWithKey(key_hex) => {
-            // Create cipher from provided key 
+            // Create cipher from provided key
             let key = hex::decode(key_hex)?;
             let cipher = Aes256Gcm::new(&Key::from_slice(&key));
             (Some(cipher), None)
         }
     };
-    
+
     // Store per-file nonce
-    let mut nonces : HashMap<RawString, String> = Default::default();
+    let mut nonces: HashMap<RawString, String> = Default::default();
 
     // Write source files into PDB
     for (raw_filepath, relpath, _) in &filepaths {
@@ -283,20 +309,19 @@ fn embed(op: EmbedOp) -> anyhow::Result<(), anyhow::Error> {
         let mut plaintext = String::new();
         file.read_to_string(&mut plaintext)?;
 
-
         // Optionally encrypt file contents
-        let (stream_filepath, delete_stream_file) : (PathBuf, bool) = match &cipher {
-            None => {
-                (PathBuf::from_str(&*raw_filepath.to_string())?, false)
-            }
+        let (stream_filepath, delete_stream_file): (PathBuf, bool) = match &cipher {
+            None => (PathBuf::from_str(&*raw_filepath.to_string())?, false),
             Some(cipher) => {
                 // Create per-file nonce; 96-bits, unique per message
                 let nonce_bytes = rng.gen::<[u8; 12]>();
                 let nonce = Nonce::from_slice(&nonce_bytes); // 96-bits; unique per message
 
                 // Encrypt text
-                let encrypted_text = cipher.encrypt(nonce, plaintext.as_bytes()).expect("Failed to encrypt");
-        
+                let encrypted_text = cipher
+                    .encrypt(nonce, plaintext.as_bytes())
+                    .expect("Failed to encrypt");
+
                 // Write encrypted data to temp file
                 let mut encrypted_file = tempfile::NamedTempFile::new()?;
                 encrypted_file.write_all(&encrypted_text)?;
@@ -352,24 +377,42 @@ fn embed(op: EmbedOp) -> anyhow::Result<(), anyhow::Error> {
         "SRCSRVTRG=%LOCALAPPDATA%\\fts\\fts_pdbsrc\\{}\\%FTS_PDBSTR_UUID%\\%var2%",
         Path::new(&op.pdb).file_stem().unwrap().to_str().unwrap()
     )?;
-    writeln!(
-        srcsrv,
-        "SRCSRVCMD=fts_pdbsrc extract_one --pdb-uuid %FTS_PDBSTR_UUID% --file %var2% --out %SRCSRVTRG% --nonce %var4%",
-    )?;
+    if nonces.is_empty() {
+        writeln!(
+            srcsrv,
+            "SRCSRVCMD=fts_pdbsrc extract_one --pdb-uuid %FTS_PDBSTR_UUID% --file %var2% --out %SRCSRVTRG%",
+        )?;
+    } else {
+        writeln!(
+            srcsrv,
+            "SRCSRVCMD=fts_pdbsrc extract_one --pdb-uuid %FTS_PDBSTR_UUID% --file %var2% --out %SRCSRVTRG% --nonce %var4%",
+        )?;
+    }
     writeln!(
         srcsrv,
         "SRCSRV: source files ------------------------------------------"
     )?;
 
+
     for (raw_filepath, relpath, filename) in &filepaths {
-        writeln!(
-            srcsrv,
-            "{}*{}*{}*{}",
-            raw_filepath,
-            relpath.to_string_lossy(),
-            filename,
-            nonces.get(raw_filepath).unwrap()
-        )?;
+        if nonces.is_empty() {
+            writeln!(
+                srcsrv,
+                "{}*{}*{}",
+                raw_filepath,
+                relpath.to_string_lossy(),
+                filename
+            )?;
+        } else {
+            writeln!(
+                srcsrv,
+                "{}*{}*{}*{}",
+                raw_filepath,
+                relpath.to_string_lossy(),
+                filename,
+                nonces.get(raw_filepath).unwrap()
+            )?;
+    }
     }
     writeln!(
         srcsrv,
@@ -409,6 +452,7 @@ fn extract_one(op: ExtractOneOp, config: Config) -> anyhow::Result<()> {
     std::thread::spawn(|| watch(WatchOp {}));
 
     // Query server
+    // FTS_TODO: make port configurable
     match TcpStream::connect("localhost:23685") {
         Ok(mut stream) => {
             // Ask service for PDB path
@@ -448,33 +492,40 @@ fn extract_one(op: ExtractOneOp, config: Config) -> anyhow::Result<()> {
             let file_stream = pdb
                 .named_stream(stream_name.as_bytes())
                 .expect(&format!("Failed to find stream named [{}]", stream_name));
-            let cipher_text = file_stream.as_slice();
+            let maybe_encrypted_text = file_stream.as_slice();
 
             // Decrypt file
-            let try_decrypt = |config: Config| -> anyhow::Result<Vec<u8>> {
+            let try_decrypt = |config: Config, nonce_str: &str| -> anyhow::Result<Vec<u8>> {
+                // Parse Nonce
+                let nonce_bytes = hex::decode(nonce_str)?;
+                let nonce = Nonce::from_slice(&nonce_bytes);
+
+                // Try to decrypt with each key
                 for hexkey in config.decode_keys {
-                    let try_key = |key_hex: &str, nonce_str: &str| -> anyhow::Result<Vec<u8>> {
+                    let try_key = |key_hex: &str, nonce| -> anyhow::Result<Vec<u8>> {
                         let key_bytes = hex::decode(key_hex)?;
                         let key = Key::from_slice(&key_bytes);
                         let cipher = Aes256Gcm::new(&key);
-                        
-                        let nonce_bytes = hex::decode(nonce_str)?;
-                        let nonce = Nonce::from_slice(&nonce_bytes);
-                        match cipher.decrypt(nonce, cipher_text) {
-                            Ok(plain_text) => Ok(plain_text),
-                            Err(_) => bail!("Failed to decrypt with key")
+
+                        match cipher.decrypt(nonce, maybe_encrypted_text) {
+                            Ok(plaintext) => Ok(plaintext),
+                            Err(_) => bail!("Failed to decrypt with key"),
                         }
                     };
 
-                    if let Ok(plain_text) = try_key(&hexkey, &op.nonce) {
-                        return Ok(plain_text)
+                    if let Ok(plaintext) = try_key(&hexkey, nonce) {
+                        return Ok(plaintext);
                     }
                 }
-                
+
                 bail!("Failed to decrypt with all keys")
             };
 
-            let plain_text = try_decrypt(config)?;
+            // Get plaintext for maybe_encrypted_text
+            let plaintext = match op.nonce {
+                Some(nonce) => try_decrypt(config, &nonce)?,
+                None => maybe_encrypted_text.to_owned()
+            };
 
             // Write to output file
             let out_dir = op
@@ -483,7 +534,7 @@ fn extract_one(op: ExtractOneOp, config: Config) -> anyhow::Result<()> {
                 .ok_or(anyhow!("Failed to get directory for path [{:?}]", op.out))?;
             fs::create_dir_all(out_dir)?;
             let mut file = std::fs::File::create(op.out)?;
-            file.write_all(&plain_text)?;
+            file.write_all(&plaintext)?;
         }
         Err(e) => {
             println!("Failed to connect: {}", e);
