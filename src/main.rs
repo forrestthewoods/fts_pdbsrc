@@ -64,6 +64,23 @@ enum EncryptMode {
     EncryptWithKey(String),
 }
 
+impl std::str::FromStr for EncryptMode {
+    type Err = anyhow::Error;
+    fn from_str(arg: &str) -> anyhow::Result<Self, Self::Err> {
+        match arg {
+            "Plaintext" => Ok(EncryptMode::Plaintext),
+            "EncryptWithRngKey" => Ok(EncryptMode::EncryptWithRngKey),
+            arg => {
+                let re_str = r"EncryptWithKey\(([a-fA-f0-9]{64})\)";
+                let re = regex::Regex::new(re_str)?;
+                let caps = re.captures(arg).ok_or(anyhow!("Failed to regex [{}] against arg [{}]", re_str, arg))?;
+                let hex_key = caps.get(1).ok_or(anyhow!("Failed to get capture group [{}]", arg))?.as_str();
+                Ok(EncryptMode::EncryptWithKey(hex_key.to_owned()))
+            }
+        }
+    }
+}
+
 /*
 impl std::str::FromStr for EncryptMode {
     type Err = anyhow::Error;
@@ -97,13 +114,8 @@ struct EmbedOp {
     #[structopt(short, long, parse(from_os_str), help = "Root for files to embed")]
     roots: Vec<PathBuf>,
 
-    #[structopt(short, long, help = "Enable encryption")]
-    encrypt: bool,
-
-    #[structopt(short = "k", long, help = "(Optional) 128-bit key to use for encryption")]
-    encrypt_key: Option<String>,
-    //#[structopt(short, long, help = "Specify encryption mode")]
-    //encrypt_mode: EncryptMode,
+    #[structopt(long, parse(try_from_str), help = "Specify encryption mode. Plaintext, EncryptFromRngKey, EncryptWithKey(HexString)")]
+    encrypt_mode: EncryptMode,
 }
 
 #[derive(Debug, StructOpt)]
@@ -148,7 +160,7 @@ enum Message {
     FoundPdb((Uuid, Option<PathBuf>)),
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 struct Config {
     pub decode_keys: Vec<String>,
 }
@@ -161,7 +173,7 @@ fn main() -> anyhow::Result<()> {
     let opts: Opts = Opts::from_args();
 
     // Read config
-    let config = read_config()?;
+    let config = read_config();
 
     // Run program
     let exit_code = match run(opts, config) {
@@ -176,12 +188,14 @@ fn main() -> anyhow::Result<()> {
     std::process::exit(exit_code);
 }
 
-fn read_config() -> anyhow::Result<Config> {
-    let mut config_path = std::env::current_exe()?;
-    config_path.set_file_name("fts_pdbsrc_config.json");
-    let config_file = std::fs::File::open(&config_path)?;
-    let config: Config = serde_json::from_reader(&config_file)?;
-    Ok(config)
+fn read_config() -> Config {
+    || -> anyhow::Result<Config> {
+        let mut config_path = std::env::current_exe()?;
+        config_path.set_file_name("fts_pdbsrc_config.json");
+        let config_file = std::fs::File::open(&config_path)?;
+        let config: Config = serde_json::from_reader(&config_file)?;
+        Ok(config)
+    }().unwrap_or_default()
 }
 
 fn run(opts: Opts, config: Config) -> anyhow::Result<()> {
@@ -272,17 +286,8 @@ fn embed(op: EmbedOp) -> anyhow::Result<(), anyhow::Error> {
     // RNG for key / nonce generation (if needed)
     let mut rng = rand::thread_rng();
 
-    let encrypt_mode = if !op.encrypt {
-        EncryptMode::Plaintext
-    } else {
-        match &op.encrypt_key {
-            Some(key) => EncryptMode::EncryptWithKey(key.clone()),
-            None => EncryptMode::EncryptWithRngKey,
-        }
-    };
-
     // Create cipher for encryption if specified by mode
-    let (cipher, rng_key): (Option<Aes256Gcm>, Option<[u8; 32]>) = match encrypt_mode {
+    let (cipher, rng_key): (Option<Aes256Gcm>, Option<[u8; 32]>) = match &op.encrypt_mode {
         EncryptMode::Plaintext => (None, None),
         EncryptMode::EncryptWithRngKey => {
             // Create cipher with randomly generated key

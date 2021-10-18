@@ -46,7 +46,9 @@
                 "--pdb",
                 "c:/temp/pdb/CrashTest.pdb",
                 "--roots",
-                "c:/temp/cpp"
+                "c:/temp/cpp",
+                "--encrypt-mode",
+                "EncryptWithKey(f05aeb0d64ee34e8961207eb4ddc3c0a4d168517c9c710b5b645a2164fde7c57)"
             ],
             "stopAtEntry": false,
             "cwd": "${workspaceRoot}",
