@@ -359,8 +359,9 @@ mod fts_pdbsrc_service {
                         }
                     };
 
-                    match event {
-                        hotwatch::Event::Remove(path) => {
+                    // Remove PDBs that are removed or renamed (src)
+                    match &event {
+                        hotwatch::Event::Remove(path) | hotwatch::Event::Rename(path, _) => {
                             // Ignore non-pdbs
                             if !is_pdb(&path) {
                                 return;
@@ -370,14 +371,19 @@ mod fts_pdbsrc_service {
                             let mut pdbs = pdbs2.lock().unwrap();
                             let maybe_key =
                                 pdbs.iter().find_map(
-                                    |(key, val)| if *val == path { Some(key.clone()) } else { None },
+                                    |(key, val)| if val == path { Some(key.clone()) } else { None },
                                 );
 
                             if let Some(key) = maybe_key {
                                 log::info!("Detected deletion of [{:?}]", pdbs.get(&key));
                                 pdbs.remove(&key);
                             }
-                        }
+                        },
+                        _ => () // ignore other events
+                    }
+
+                    // Add PDBs that are created, modified, or renamed (dst)
+                    match &event {
                         hotwatch::Event::Create(path) | hotwatch::Event::Write(path) => {
                             // Ignore events for non-PDBs
                             if !is_pdb(&path) {
