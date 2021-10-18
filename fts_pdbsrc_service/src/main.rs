@@ -182,7 +182,7 @@ mod fts_pdbsrc_service {
         let pdbs: Arc<Mutex<HashMap<Uuid, PathBuf>>> = Arc::new(Mutex::new(pdbs));
 
         // Watch each config filepath for changes
-        let mut path_watchers = watch_paths(&config.paths);
+        let mut path_watchers = watch_paths(&config.paths, pdbs.clone());
 
         // Watch config file
         // When config changes, clear old watchs/pdbs and refresh
@@ -203,15 +203,11 @@ mod fts_pdbsrc_service {
                         // Clear old watchers
                         path_watchers.clear();
 
-                        // Find PDBs and watch paths under lock
-                        {
-                            // Find new pdbs
-                            let mut locked_pdbs = pdbs2.lock().unwrap();
-                            *locked_pdbs = find_pdbs(&new_config.paths);
+                        // Recreate watchers
+                        path_watchers = watch_paths(&new_config.paths, pdbs2.clone());
 
-                            // Recreate watchers
-                            path_watchers = watch_paths(&new_config.paths);
-                        }
+                        // Find new pdbs
+                        *pdbs2.lock().unwrap() = find_pdbs(&new_config.paths);
                     }
 
                     Ok(())
@@ -345,14 +341,58 @@ mod fts_pdbsrc_service {
         Ok(message)
     }
 
-    fn watch_paths(paths: &[ConfigPath]) -> Vec<hotwatch::Hotwatch> {
+    fn watch_paths(
+        paths: &[ConfigPath],
+        pdbs: Arc<Mutex<HashMap<Uuid, PathBuf>>>,
+    ) -> Vec<hotwatch::Hotwatch> {
         paths
             .iter()
             .filter_map(|entry| {
                 let mut hw = hotwatch::Hotwatch::new().expect("hotwatch failed to initialize!");
-                // $$$FTS_TODO: Also pay attention to newly created PDBs
-                match hw.watch(&entry.path, |_event: hotwatch::Event| {
-                    // $$$FTS_TODO: Actually do something here
+                let pdbs2 = pdbs.clone();
+                match hw.watch(&entry.path, move |event: hotwatch::Event| {
+                    // Help to detect PDB
+                    let is_pdb = |path: &Path| -> bool {
+                        match path.extension().and_then(|os_str| os_str.to_str()) {
+                            Some("pdb") => true,
+                            _ => false,
+                        }
+                    };
+
+                    match event {
+                        hotwatch::Event::Remove(path) => {
+                            // Ignore non-pdbs
+                            if !is_pdb(&path) {
+                                return;
+                            }
+
+                            // Remove PDB if it's in the db
+                            let mut pdbs = pdbs2.lock().unwrap();
+                            let maybe_key =
+                                pdbs.iter().find_map(
+                                    |(key, val)| if *val == path { Some(key.clone()) } else { None },
+                                );
+
+                            if let Some(key) = maybe_key {
+                                log::info!("Detected deletion of [{:?}]", pdbs.get(&key));
+                                pdbs.remove(&key);
+                            }
+                        }
+                        hotwatch::Event::Create(path) | hotwatch::Event::Write(path) => {
+                            // Ignore events for non-PDBs
+                            if !is_pdb(&path) {
+                                return;
+                            }
+
+                            // PDB was created or modified, process it
+                            log::info!("Detected creation or modification of [{:?}]", path);
+                            if let Some((uuid, path)) = process_pdb_path(&path) {
+                                log::info!("Found valid PDB [{:?}] with Uuid [{}]", path, uuid);
+                                pdbs2.lock().unwrap().insert(uuid, path);
+                            }
+                        }
+                        _ => (), // Ignore other events
+                    }
                 }) {
                     Ok(()) => {
                         log::info!("Created watch for: [{:?}]", entry.path);
@@ -378,46 +418,52 @@ mod fts_pdbsrc_service {
         Ok(config)
     }
 
-    fn process_walkdir_entry(entry: walkdir::DirEntry) -> anyhow::Result<(Uuid, PathBuf)> {
-        log::debug!("Checking entry: [{:?}]", entry.path());
+    fn process_pdb_path(path: &Path) -> Option<(Uuid, PathBuf)> {
+        // Ignore non-PDBs
+        match path.extension().and_then(|os_str| os_str.to_str()) {
+            Some("pdb") => (),
+            _ => return None,
+        };
 
-        if entry.file_type().is_file() {
-            // Verify file is a PDB
-            let path = entry.path();
-            match path.extension() {
-                Some(os_str) => match os_str.to_str() {
-                    Some("pdb") => (),
-                    _ => bail!("Not a pdb"),
-                },
-                _ => bail!("No extension"),
-            }
+        log::info!("Checking PDB file: [{:?}]", path);
 
-            // Open PDB
-            let pdbfile = File::open(path)?;
-            let mut pdb = pdb::PDB::open(pdbfile)?;
+        // Open PDB
+        let pdbfile = File::open(path).ok()?;
+        log::trace!("Opened file");
+        let mut pdb = pdb::PDB::open(pdbfile).ok()?;
+        log::trace!("Opened file as PDB");
 
-            // Get srcsrv stream
-            let srcsrv_stream = pdb.named_stream("srcsrv".as_bytes())?;
-            let srcsrv_str: &str = std::str::from_utf8(&srcsrv_stream)?;
+        // Get srcsrv stream
+        let srcsrv_stream = pdb.named_stream("srcsrv".as_bytes()).ok()?;
+        let srcsrv_str: &str = std::str::from_utf8(&srcsrv_stream).ok()?;
+        log::trace!("Found srcsrv stream");
 
-            // Verify srcsrv is compatible
-            if srcsrv_str.contains("VERCTRL=fts_pdbsrc") && srcsrv_str.contains("VERSION=1") {
-                // Extract Uuid
-                let key = "FTS_PDBSTR_UUID=";
-                let uuid: Uuid = srcsrv_str
-                    .lines()
-                    .find(|line| line.starts_with(key))
-                    .and_then(|line| Uuid::parse_str(&line[key.len()..]).ok())
-                    .ok_or(anyhow!("Failed to parse Uuid.\n{}", srcsrv_str))?;
+        // Verify srcsrv is compatible
+        if srcsrv_str.contains("VERCTRL=fts_pdbsrc") && srcsrv_str.contains("VERSION=1") {
+            log::trace!("Found VERCTRL=fts_pdbsrc");
+            
+            // Extract Uuid
+            let key = "FTS_PDBSTR_UUID=";
+            let uuid: Uuid = srcsrv_str
+                .lines()
+                .find(|line| line.starts_with(key))
+                .and_then(|line| Uuid::parse_str(&line[key.len()..]).ok())?;
+            log::trace!("Found UUID: {}", uuid);
 
-                // Return result
-                let path = path.to_owned();
-                Ok((uuid, path.to_owned()))
-            } else {
-                bail!("Incompatible srcsrv.\n{}", srcsrv_str);
-            }
+            // Return result
+            let path = path.to_owned();
+            Some((uuid, path.to_owned()))
         } else {
-            bail!("Not a file")
+            log::trace!("Did not find VERCTRL=fts_pdbsrc");
+            None
+        }
+    }
+
+    fn process_walkdir_entry(entry: walkdir::DirEntry) -> Option<(Uuid, PathBuf)> {
+        if entry.file_type().is_file() {
+            process_pdb_path(entry.path())
+        } else {
+            None
         }
     }
 
@@ -432,7 +478,7 @@ mod fts_pdbsrc_service {
                 walkdir::WalkDir::new(&path_entry.path)
                     .follow_links(path_entry.follow_symlinks)
                     .into_iter()
-                    .filter_map(|dir_entry| process_walkdir_entry(dir_entry.unwrap()).ok())
+                    .filter_map(|dir_entry| process_walkdir_entry(dir_entry.unwrap()))
             })
             .collect::<HashMap<Uuid, PathBuf>>();
 

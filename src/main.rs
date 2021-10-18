@@ -68,13 +68,18 @@ impl std::str::FromStr for EncryptMode {
     type Err = anyhow::Error;
     fn from_str(arg: &str) -> anyhow::Result<Self, Self::Err> {
         match arg {
-            "Plaintext" => Ok(EncryptMode::Plaintext),
+            "plaintext" | "Plaintext" => Ok(EncryptMode::Plaintext),
             "EncryptWithRngKey" => Ok(EncryptMode::EncryptWithRngKey),
             arg => {
                 let re_str = r"EncryptWithKey\(([a-fA-f0-9]{64})\)";
                 let re = regex::Regex::new(re_str)?;
-                let caps = re.captures(arg).ok_or(anyhow!("Failed to regex [{}] against arg [{}]", re_str, arg))?;
-                let hex_key = caps.get(1).ok_or(anyhow!("Failed to get capture group [{}]", arg))?.as_str();
+                let caps =
+                    re.captures(arg)
+                        .ok_or(anyhow!("Failed to regex [{}] against arg [{}]", re_str, arg))?;
+                let hex_key = caps
+                    .get(1)
+                    .ok_or(anyhow!("Failed to get capture group [{}]", arg))?
+                    .as_str();
                 Ok(EncryptMode::EncryptWithKey(hex_key.to_owned()))
             }
         }
@@ -114,7 +119,11 @@ struct EmbedOp {
     #[structopt(short, long, parse(from_os_str), help = "Root for files to embed")]
     roots: Vec<PathBuf>,
 
-    #[structopt(long, parse(try_from_str), help = "Specify encryption mode. Plaintext, EncryptFromRngKey, EncryptWithKey(HexString)")]
+    #[structopt(
+        long,
+        parse(try_from_str),
+        help = "Specify encryption mode. Plaintext, EncryptFromRngKey, EncryptWithKey(HexString)"
+    )]
     encrypt_mode: EncryptMode,
 }
 
@@ -195,7 +204,8 @@ fn read_config() -> Config {
         let config_file = std::fs::File::open(&config_path)?;
         let config: Config = serde_json::from_reader(&config_file)?;
         Ok(config)
-    }().unwrap_or_default()
+    }()
+    .unwrap_or_default()
 }
 
 fn run(opts: Opts, config: Config) -> anyhow::Result<()> {
@@ -398,7 +408,6 @@ fn embed(op: EmbedOp) -> anyhow::Result<(), anyhow::Error> {
         "SRCSRV: source files ------------------------------------------"
     )?;
 
-
     for (raw_filepath, relpath, filename) in &filepaths {
         if nonces.is_empty() {
             writeln!(
@@ -417,7 +426,7 @@ fn embed(op: EmbedOp) -> anyhow::Result<(), anyhow::Error> {
                 filename,
                 nonces.get(raw_filepath).unwrap()
             )?;
-    }
+        }
     }
     writeln!(
         srcsrv,
@@ -529,7 +538,7 @@ fn extract_one(op: ExtractOneOp, config: Config) -> anyhow::Result<()> {
             // Get plaintext for maybe_encrypted_text
             let plaintext = match op.nonce {
                 Some(nonce) => try_decrypt(config, &nonce)?,
-                None => maybe_encrypted_text.to_owned()
+                None => maybe_encrypted_text.to_owned(),
             };
 
             // Write to output file
