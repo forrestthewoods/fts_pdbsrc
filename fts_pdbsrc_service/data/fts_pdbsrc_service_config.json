@@ -1,0 +1,6 @@
+{
+    "paths": [
+        { "path" : "c:/temp/", "follow_symlinks": false }
+    ],
+    "log_level": "Info"
+}

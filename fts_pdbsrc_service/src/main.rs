@@ -2,6 +2,8 @@ use anyhow::*;
 
 #[cfg(windows)]
 fn main() -> anyhow::Result<()> {
+    std::env::vars().for_each(|v| println!("cargo:warning=Envvar: {:?}", v));
+
     // Init logging
     init_logging()?;
 
