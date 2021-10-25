@@ -380,8 +380,8 @@ mod fts_pdbsrc_service {
                                 log::info!("Detected deletion of [{:?}]", pdbs.get(&key));
                                 pdbs.remove(&key);
                             }
-                        },
-                        _ => () // ignore other events
+                        }
+                        _ => (), // ignore other events
                     }
 
                     // Add PDBs that are created, modified, or renamed (dst)
@@ -449,7 +449,7 @@ mod fts_pdbsrc_service {
         // Verify srcsrv is compatible
         if srcsrv_str.contains("VERCTRL=fts_pdbsrc") && srcsrv_str.contains("VERSION=1") {
             log::trace!("Found VERCTRL=fts_pdbsrc");
-            
+
             // Extract Uuid
             let key = "FTS_PDBSTR_UUID=";
             let uuid: Uuid = srcsrv_str
