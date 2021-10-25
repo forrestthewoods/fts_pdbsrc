@@ -35,14 +35,11 @@ fn init_logging() -> anyhow::Result<()> {
         let metadata = entry.metadata()?;
         if metadata.is_file() {
             let modified = metadata.modified()?;
-            match std::time::SystemTime::now().duration_since(modified) {
-                Ok(elapsed) => {
-                    if elapsed > one_week_in_seconds {
-                        // Delete old logs
-                        std::fs::remove_file(entry.path())?;
-                    }
+            if let Ok(elapsed) = std::time::SystemTime::now().duration_since(modified) {
+                if elapsed > one_week_in_seconds {
+                    // Delete old logs
+                    std::fs::remove_file(entry.path())?;
                 }
-                _ => (), // ignore errors
             }
         }
     }
@@ -215,7 +212,7 @@ mod fts_pdbsrc_service {
                     Ok(())
                 }();
             })
-            .expect(&format!("failed to watch [{:?}]!", &config_path));
+            .unwrap_or_else(|_| panic!("failed to watch [{:?}]!", &config_path));
 
         // Listen to connections
         std::thread::spawn(move || accept_connections(pdbs));
@@ -275,8 +272,7 @@ mod fts_pdbsrc_service {
                         Message::FindPdb(uuid) => {
                             log::info!("Received request for PDB with Uuid: [{}]", uuid);
 
-                            let search_result: Option<PathBuf> =
-                                pdb_db.lock().unwrap().get(&uuid).map(|uuid| uuid.clone());
+                            let search_result: Option<PathBuf> = pdb_db.lock().unwrap().get(&uuid).cloned();
                             match search_result {
                                 Some(path) => {
                                     log::info!("Found path [{:?}] for uuid [{}]", path, uuid);
@@ -355,26 +351,22 @@ mod fts_pdbsrc_service {
                 match hw.watch(&entry.path, move |event: hotwatch::Event| {
                     // Help to detect PDB
                     let is_pdb = |path: &Path| -> bool {
-                        match path.extension().and_then(|os_str| os_str.to_str()) {
-                            Some("pdb") => true,
-                            _ => false,
-                        }
+                        matches!(path.extension().and_then(|os_str| os_str.to_str()), Some("pdb"))
                     };
 
                     // Remove PDBs that are removed or renamed (src)
                     match &event {
                         hotwatch::Event::Remove(path) | hotwatch::Event::Rename(path, _) => {
                             // Ignore non-pdbs
-                            if !is_pdb(&path) {
+                            if !is_pdb(path) {
                                 return;
                             }
 
                             // Remove PDB if it's in the db
                             let mut pdbs = pdbs2.lock().unwrap();
-                            let maybe_key =
-                                pdbs.iter().find_map(
-                                    |(key, val)| if val == path { Some(key.clone()) } else { None },
-                                );
+                            let maybe_key = pdbs
+                                .iter()
+                                .find_map(|(key, val)| if val == path { Some(*key) } else { None });
 
                             if let Some(key) = maybe_key {
                                 log::info!("Detected deletion of [{:?}]", pdbs.get(&key));
@@ -388,13 +380,13 @@ mod fts_pdbsrc_service {
                     match &event {
                         hotwatch::Event::Create(path) | hotwatch::Event::Write(path) => {
                             // Ignore events for non-PDBs
-                            if !is_pdb(&path) {
+                            if !is_pdb(path) {
                                 return;
                             }
 
                             // PDB was created or modified, process it
                             log::info!("Detected creation or modification of [{:?}]", path);
-                            if let Some((uuid, path)) = process_pdb_path(&path) {
+                            if let Some((uuid, path)) = process_pdb_path(path) {
                                 log::info!("Found valid PDB [{:?}] with Uuid [{}]", path, uuid);
                                 pdbs2.lock().unwrap().insert(uuid, path);
                             }
@@ -459,7 +451,6 @@ mod fts_pdbsrc_service {
             log::trace!("Found UUID: {}", uuid);
 
             // Return result
-            let path = path.to_owned();
             Some((uuid, path.to_owned()))
         } else {
             log::trace!("Did not find VERCTRL=fts_pdbsrc");

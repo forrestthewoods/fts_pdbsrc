@@ -73,12 +73,12 @@ impl std::str::FromStr for EncryptMode {
             arg => {
                 let re_str = r"EncryptWithKey\(([a-fA-f0-9]{64})\)";
                 let re = regex::Regex::new(re_str)?;
-                let caps =
-                    re.captures(arg)
-                        .ok_or(anyhow!("Failed to regex [{}] against arg [{}]", re_str, arg))?;
+                let caps = re
+                    .captures(arg)
+                    .ok_or_else(|| anyhow!("Failed to regex [{}] against arg [{}]", re_str, arg))?;
                 let hex_key = caps
                     .get(1)
-                    .ok_or(anyhow!("Failed to get capture group [{}]", arg))?
+                    .ok_or_else(|| anyhow!("Failed to get capture group [{}]", arg))?
                     .as_str();
                 Ok(EncryptMode::EncryptWithKey(hex_key.to_owned()))
             }
@@ -250,7 +250,9 @@ fn embed(op: EmbedOp) -> anyhow::Result<(), anyhow::Error> {
                 let filepath = Path::new(filename_utf8);
 
                 if let Ok(canonical_filepath) = fs::canonicalize(&filepath) {
-                    match canonical_roots
+                    
+                    // Find subpath relative to a specified root
+                    let maybe_subpath = canonical_roots
                         .iter()
                         .filter_map(|root| {
                             canonical_filepath.starts_with(root).then(|| {
@@ -260,9 +262,10 @@ fn embed(op: EmbedOp) -> anyhow::Result<(), anyhow::Error> {
                                     .collect::<PathBuf>()
                             })
                         })
-                        .next()
-                    {
-                        Some(subpath) => filepaths.push((
+                        .next();
+                    
+                    if let Some(subpath) = maybe_subpath {
+                        filepaths.push((
                             raw_filepath,
                             subpath.clone(),
                             subpath
@@ -271,8 +274,7 @@ fn embed(op: EmbedOp) -> anyhow::Result<(), anyhow::Error> {
                                 .to_string_lossy()
                                 .to_owned()
                                 .to_string(),
-                        )),
-                        None => {}
+                        ))
                     }
                 }
             }
@@ -303,13 +305,13 @@ fn embed(op: EmbedOp) -> anyhow::Result<(), anyhow::Error> {
             // Create cipher with randomly generated key
             let mut rng = rand::thread_rng();
             let key_rng_bytes = rng.gen::<[u8; 32]>();
-            let cipher = Aes256Gcm::new(&Key::from_slice(&key_rng_bytes));
+            let cipher = Aes256Gcm::new(Key::from_slice(&key_rng_bytes));
             (Some(cipher), Some(key_rng_bytes))
         }
         EncryptMode::EncryptWithKey(key_hex) => {
             // Create cipher from provided key
             let key = hex::decode(key_hex)?;
-            let cipher = Aes256Gcm::new(&Key::from_slice(&key));
+            let cipher = Aes256Gcm::new(Key::from_slice(&key));
             (Some(cipher), None)
         }
     };
@@ -442,7 +444,7 @@ fn embed(op: EmbedOp) -> anyhow::Result<(), anyhow::Error> {
         "pdbstr",                                           // exe to run
         "-w",                                               // write
         &format!("-p:{}", &op.pdb),                         // path to pdb
-        &format!("-s:srcsrv"),                              // stream to write
+        "-s:srcsrv",                                        // stream to write
         &format!("-i:{}", tempfile_path.to_string_lossy()), // file to write into stream
     ];
     run_command(cmd)?;
@@ -506,7 +508,7 @@ fn extract_one(op: ExtractOneOp, config: Config) -> anyhow::Result<()> {
             let stream_name = format!("/fts_pdbsrc/{}", op.file);
             let file_stream = pdb
                 .named_stream(stream_name.as_bytes())
-                .expect(&format!("Failed to find stream named [{}]", stream_name));
+                .unwrap_or_else(|_| panic!("Failed to find stream named [{}]", stream_name));
             let maybe_encrypted_text = file_stream.as_slice();
 
             // Decrypt file
@@ -520,7 +522,7 @@ fn extract_one(op: ExtractOneOp, config: Config) -> anyhow::Result<()> {
                     let try_key = |key_hex: &str, nonce| -> anyhow::Result<Vec<u8>> {
                         let key_bytes = hex::decode(key_hex)?;
                         let key = Key::from_slice(&key_bytes);
-                        let cipher = Aes256Gcm::new(&key);
+                        let cipher = Aes256Gcm::new(key);
 
                         match cipher.decrypt(nonce, maybe_encrypted_text) {
                             Ok(plaintext) => Ok(plaintext),
@@ -538,7 +540,7 @@ fn extract_one(op: ExtractOneOp, config: Config) -> anyhow::Result<()> {
 
             // Get plaintext for maybe_encrypted_text
             let plaintext = match op.nonce {
-                Some(nonce) => try_decrypt(config, &nonce)?,
+                Some(ref nonce) => try_decrypt(config, nonce)?,
                 None => maybe_encrypted_text.to_owned(),
             };
 
@@ -546,7 +548,7 @@ fn extract_one(op: ExtractOneOp, config: Config) -> anyhow::Result<()> {
             let out_dir = op
                 .out
                 .parent()
-                .ok_or(anyhow!("Failed to get directory for path [{:?}]", op.out))?;
+                .ok_or_else(|| anyhow!("Failed to get directory for path [{:?}]", op.out))?;
             fs::create_dir_all(out_dir)?;
             let mut file = std::fs::File::create(op.out)?;
             file.write_all(&plaintext)?;
@@ -636,7 +638,7 @@ fn watch(_: WatchOp) -> anyhow::Result<()> {
                     .lines()
                     .find(|line| line.starts_with(key))
                     .and_then(|line| Uuid::parse_str(&line[key.len()..]).ok())
-                    .ok_or(anyhow!("Failed to parse Uuid.\n{}", srcsrv_str))?;
+                    .ok_or_else(|| anyhow!("Failed to parse Uuid.\n{}", srcsrv_str))?;
 
                 // Store result
                 relevant_pdbs.insert(uuid, entry.path().to_path_buf());

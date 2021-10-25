@@ -6,8 +6,6 @@ edition = "2018"
 [dependencies]
 anyhow = "1.0"
 chrono = "0.4.19"
-crossbeam-deque = "0.7.3"
-crossbeam-utils = "0.7.2"
 dirs = "3.0.2"
 hotwatch = "0.4.6"
 log = { version = "0.4.14", features = ["serde"] }
