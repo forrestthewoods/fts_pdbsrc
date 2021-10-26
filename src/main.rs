@@ -86,30 +86,6 @@ impl std::str::FromStr for EncryptMode {
     }
 }
 
-/*
-impl std::str::FromStr for EncryptMode {
-    type Err = anyhow::Error;
-    fn from_str(encrypt_mode: &str) -> anyhow::Result<Self, Self::Err> {
-        println!("Attempting to parse: [{}]", encrypt_mode);
-        match serde_json::from_str(encrypt_mode) {
-            Ok(encrypt_mode) => Ok(encrypt_mode),
-            Err(e) => anyhow::Result::Err(e).context("Failed to parse EncryptMode")
-        }
-        /*
-        match encrypt_mode {
-            "plaintext" => Ok(EncryptMode::Plaintext),
-            "rngkey" => Ok(EncryptMode::EncryptWithRngKey),
-            maybe_key => {
-                let key_bytes = hex::decode(maybe_key)?;
-                let key = Key::from_slice(&key_bytes);
-                let cipher = Aes256Gcm::new(&key);
-                Ok(EncryptMode::EncryptWithKey(cipher))
-            }
-        }
-        */
-    }
-}
-*/
 
 #[derive(Debug, StructOpt)]
 struct EmbedOp {
@@ -323,8 +299,8 @@ fn embed(op: EmbedOp) -> anyhow::Result<(), anyhow::Error> {
     for (raw_filepath, relpath, _) in &filepaths {
         // Read file
         let mut file = File::open(&*raw_filepath.to_string())?;
-        let mut plaintext = String::new();
-        file.read_to_string(&mut plaintext)?;
+        let mut plaintext : Vec<u8> = Default::default();
+        file.read_to_end(&mut plaintext).with_context(|| format!("Error reading file: [{:?}]", raw_filepath))?;
 
         // Optionally encrypt file contents
         let (stream_filepath, delete_stream_file): (PathBuf, bool) = match &cipher {
@@ -336,8 +312,8 @@ fn embed(op: EmbedOp) -> anyhow::Result<(), anyhow::Error> {
 
                 // Encrypt text
                 let encrypted_text = cipher
-                    .encrypt(nonce, plaintext.as_bytes())
-                    .expect("Failed to encrypt");
+                    .encrypt(nonce, plaintext.as_slice())
+                    .expect(&format!("Failed to encrypt file: [{:?}]", raw_filepath));
 
                 // Write encrypted data to temp file
                 let mut encrypted_file = tempfile::NamedTempFile::new()?;
@@ -360,7 +336,7 @@ fn embed(op: EmbedOp) -> anyhow::Result<(), anyhow::Error> {
             &format!("-s:/fts_pdbsrc/{}", relpath.to_string_lossy()), // stream to write
             &format!("-i:{}", stream_filepath.to_string_lossy()),     // file to write into stream
         ];
-        run_command(cmd)?;
+        run_command(cmd).with_context(|| format!("Cmd: {:?}", cmd))?;
 
         // Remove encrypted tempfile if one was created
         if delete_stream_file {
