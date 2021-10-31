@@ -25,8 +25,8 @@ That's what this tool does.
 To embed:
 
 1. Run fts_pdbsrc embed --pdb c:/path/to/foo.pdb --roots c:/path/to/ProjectRoot --encrypt-mode Plaintext
-    a. Encrypt with rng key: --encrypt-mode EncryptFromRngKey
-    b. Encrypt key explicit key: --encrypt-mode EncryptWithKey(0124567890124567890124567890124567890124567890124567890124567890)
+    - Encrypt with rng key: --encrypt-mode EncryptFromRngKey
+    - Encrypt key explicit key: --encrypt-mode EncryptWithKey(0124567890124567890124567890124567890124567890124567890124567890)
 
 To extract:
 
