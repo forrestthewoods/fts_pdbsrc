@@ -33,6 +33,6 @@ To extract:
 1. Install `fts_pdbsrc.exe` and `fts_pdbsrc_service.exe` into your path
 1. Add `.pdb` search directories to `fts_pdbsrc_service_config.json`
 1. (Optional) Add decryption keys to `fts_pdbsrc_config.json`
-1. Run `fts_pdbsrc.exe install_service` once
+1. (Admin) Run `fts_pdbsrc.exe install_service` once
     a. To uninstall: `fts_pdbsrc.exe uninstall_service`
 1. Debug with Visual Studio!

@@ -7,13 +7,12 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::net::{TcpStream};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use structopt::StructOpt;
 use subprocess::*;
 use uuid::Uuid;
-use walkdir::WalkDir;
 
 // ----------------------------------------------------------------------------
 // Command line argument types
@@ -39,10 +38,6 @@ enum Op {
 
     #[structopt(name = "info", about = "Dump files and streams in PDB")]
     Info(InfoOp),
-
-    // TODO: delete
-    #[structopt(name = "watch")]
-    Watch(WatchOp),
 
     #[structopt(
         name = "install_service",
@@ -131,9 +126,6 @@ struct InfoOp {
 }
 
 #[derive(Debug, StructOpt)]
-struct WatchOp {}
-
-#[derive(Debug, StructOpt)]
 struct InstallServiceOp {}
 
 #[derive(Debug, StructOpt)]
@@ -189,7 +181,6 @@ fn run(opts: Opts, config: Config) -> anyhow::Result<()> {
         Op::Embed(op) => embed(op)?,
         Op::ExtractOne(op) => extract_one(op, config)?,
         Op::Info(op) => info(op)?,
-        Op::Watch(op) => watch(op)?,
         Op::InstallService(op) => install_service(op)?,
         Op::UninstallService(op) => uninstall_service(op)?,
     }
@@ -313,7 +304,7 @@ fn embed(op: EmbedOp) -> anyhow::Result<(), anyhow::Error> {
                 // Encrypt text
                 let encrypted_text = cipher
                     .encrypt(nonce, plaintext.as_slice())
-                    .expect(&format!("Failed to encrypt file: [{:?}]", raw_filepath));
+                    .unwrap_or_else(|_| panic!("Failed to encrypt file: [{:?}]", raw_filepath));
 
                 // Write encrypted data to temp file
                 let mut encrypted_file = tempfile::NamedTempFile::new()?;
@@ -355,12 +346,6 @@ fn embed(op: EmbedOp) -> anyhow::Result<(), anyhow::Error> {
     writeln!(srcsrv, "VERSION=1")?;
     writeln!(srcsrv, "VERCTRL=fts_pdbsrc")?;
     // TODO: add datetime
-    // TODO: remove FTS_PDB_NAME?
-    writeln!(
-        srcsrv,
-        "FTS_PDB_NAME={}",
-        Path::new(&op.pdb).file_name().unwrap().to_str().unwrap()
-    )?;
     writeln!(
         srcsrv,
         "SRCSRV: variables ------------------------------------------"
@@ -441,9 +426,6 @@ fn embed(op: EmbedOp) -> anyhow::Result<(), anyhow::Error> {
 }
 
 fn extract_one(op: ExtractOneOp, config: Config) -> anyhow::Result<()> {
-    // Temp: span watch
-    std::thread::spawn(|| watch(WatchOp {}));
-
     // Query server
     // FTS_TODO: make port configurable
     match TcpStream::connect("localhost:23685") {
@@ -572,91 +554,6 @@ fn info(op: InfoOp) -> anyhow::Result<()> {
     stream_names
         .iter()
         .for_each(|stream_name| println!("Stream: [{}]", stream_name.name));
-
-    Ok(())
-}
-
-fn watch(_: WatchOp) -> anyhow::Result<()> {
-    // Find relevant pdbs (pdbs containing srcsrv w/ VERCTRL=fts_pdbsrc
-    let mut relevant_pdbs: HashMap<Uuid, PathBuf> = Default::default();
-
-    for entry in WalkDir::new("c:/temp/pdb").into_iter().filter_map(|e| e.ok()) {
-        // Look for files
-        if !entry.file_type().is_file() {
-            continue;
-        }
-
-        // Look for files that end with .pdb
-        if !entry
-            .file_name()
-            .to_str()
-            .map_or(false, |filename| filename.ends_with(".pdb"))
-        {
-            continue;
-        }
-
-        // Check if this pdb is an fts
-        // Use lambda for conveient result catching
-        let _ = || -> anyhow::Result<()> {
-            // Open PDB
-            let pdbfile = File::open(entry.path())?;
-            let mut pdb = pdb::PDB::open(pdbfile)?;
-
-            // Get srcsrv stream
-            let srcsrv_stream = pdb.named_stream("srcsrv".as_bytes())?;
-            let srcsrv_str: &str = std::str::from_utf8(&srcsrv_stream)?;
-
-            // Verify srcsrv is compatible
-            if srcsrv_str.contains("VERCTRL=fts_pdbsrc") && srcsrv_str.contains("VERSION=1") {
-                // Extract Uuid
-                let key = "FTS_PDBSTR_UUID=";
-                let uuid: Uuid = srcsrv_str
-                    .lines()
-                    .find(|line| line.starts_with(key))
-                    .and_then(|line| Uuid::parse_str(&line[key.len()..]).ok())
-                    .ok_or_else(|| anyhow!("Failed to parse Uuid.\n{}", srcsrv_str))?;
-
-                // Store result
-                relevant_pdbs.insert(uuid, entry.path().to_path_buf());
-            } else {
-                bail!("Incompatible srcsrv.\n{}", srcsrv_str);
-            }
-
-            Ok(())
-        }();
-    }
-
-    let handle_connection = |mut stream: &mut TcpStream,
-                             pdb_db: &HashMap<Uuid, PathBuf>|
-     -> anyhow::Result<()> {
-        loop {
-            let msg = read_message(&mut stream)?;
-            match msg {
-                Message::FindPdb(uuid) => match pdb_db.get(&uuid) {
-                    Some(path) => send_message(&mut stream, Message::FoundPdb((uuid, Some(path.clone()))))?,
-                    None => send_message(&mut stream, Message::FoundPdb((uuid, None)))?,
-                },
-                _ => return Err(anyhow!("Unexpected message: [{:?}]", msg)),
-            }
-        }
-    };
-
-    // Listen
-    let listener = TcpListener::bind("localhost:23685")?; // port chosen randomly
-    for stream in listener.incoming() {
-        match stream {
-            Ok(mut stream) => {
-                let pdb_copy = relevant_pdbs.clone();
-                std::thread::spawn(move || {
-                    let _ = handle_connection(&mut stream, &pdb_copy);
-                    stream.shutdown(std::net::Shutdown::Both).unwrap();
-                });
-            }
-            Err(e) => println!("Error accepting listener: [{}]", e),
-        }
-    }
-
-    println!("No more listeners?");
 
     Ok(())
 }

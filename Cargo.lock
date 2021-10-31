@@ -251,7 +251,6 @@ dependencies = [
  "subprocess",
  "tempfile",
  "uuid",
- "walkdir",
  "which",
  "windows-service",
 ]
