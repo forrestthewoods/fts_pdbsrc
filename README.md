@@ -24,6 +24,8 @@ That's what this tool does.
 
 To embed:
 
+1. Make sure `pdbstr.exe` is on your path
+    - It's included in [Windows SDK](https://developer.microsoft.com/en-us/windows/downloads/windows-sdk/)
 1. Run `fts_pdbsrc embed --pdb c:/path/to/foo.pdb --roots c:/path/to/ProjectRoot --encrypt-mode Plaintext`
     - Encrypt with rng key: `--encrypt-mode EncryptFromRngKey`
     - Encrypt key explicit key: `--encrypt-mode EncryptWithKey(0124567890124567890124567890124567890124567890124567890124567890)`
