@@ -36,3 +36,18 @@ To extract:
 1. (Admin) Run `fts_pdbsrc.exe install_service` once
     a. To uninstall: `fts_pdbsrc.exe uninstall_service`
 1. Debug with Visual Studio!
+
+# Platform Support
+
+This project is entirely specific to the Microsoft PDB file format and is therefore only supported on Windows.
+
+# Q&A
+
+Q: Where do source files gets extracted to?
+A: `C:\Users\$USERNAME\AppData\Local\fts_pdbsrc\UUID\path\to\your\file.cpp`
+
+Q: Where do `fts_pdbsrc_service` logs go?
+A: `C:\Windows\System32\config\systemprofile\AppData\Local\fts\fts_pdbsrc_service\logs`
+
+Q: Should I trust the encryption features of this?
+A: Absolutely not. They exist as a template that can be replaced by someone who knows what they're doing.

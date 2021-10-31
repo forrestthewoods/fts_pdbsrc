@@ -46,7 +46,7 @@ fn init_logging() -> anyhow::Result<()> {
 
     // Create new log file
     let local_time = chrono::Local::now();
-    let new_log_path = log_dir.join(local_time.format("%Y-%m-%d--%Hh-%Mm-%Ss.log").to_string());
+    let new_log_path = log_dir.join(local_time.format("fts_pdbsrc_service-%Y-%m-%d--%Hh-%Mm-%Ss.log").to_string());
 
     // Initialize simple log
     use simplelog::*;

@@ -114,12 +114,6 @@ struct ExtractOneOp {
 }
 
 #[derive(Debug, StructOpt)]
-struct ExtractAllOp {
-    #[structopt(short, long, help = "Target PDB for specified operation")]
-    pdb: String,
-}
-
-#[derive(Debug, StructOpt)]
 struct InfoOp {
     #[structopt(short, long, help = "Target PDB for specified operation")]
     pdb: String,
